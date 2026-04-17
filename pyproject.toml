@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-core"
+version = "0.1.0"
+description = "Auth, billing, and logging infrastructure for MCP-first servers."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "swapp1990" }]
+keywords = ["mcp", "fastapi", "logto", "stripe", "billing", "auth"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "fastapi>=0.109.0",
+    "PyJWT>=2.8.0",
+    "cryptography>=41.0.0",
+    "motor>=3.3.0",
+    "stripe>=8.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "mongomock-motor>=0.0.1",
+    "python-dotenv>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/swapp1990/mcp-core"
+Repository = "https://github.com/swapp1990/mcp-core"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_core"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "live: requires real Logto/MongoDB/Stripe (RUN_LIVE_TESTS=1)",
+]
