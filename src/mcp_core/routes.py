@@ -88,6 +88,50 @@ def install_routes(app: FastAPI, core: Any) -> None:
                 body = {}
             return await core.dcr.register(body)
 
+    # Override fastapi-mcp's authorize proxy with one that sends `resource`
+    # (RFC 8707) instead of `audience`. Logto only issues JWT access tokens
+    # bound to the API resource when `resource=<indicator>` is present on the
+    # authorize request; `audience=` alone yields an opaque token that
+    # mcp-core's verify_token can't decode. First-match router dispatch means
+    # this route wins over fastapi-mcp's (registered later via mount_sse).
+    if core.auth.endpoint and core.auth.api_resource:
+        from urllib.parse import urlencode
+
+        from fastapi.responses import RedirectResponse
+
+        _authorize_upstream = f"{core.auth.endpoint}/oidc/auth"
+        _api_resource = core.auth.api_resource
+        _default_scopes = list(
+            getattr(core, "_oauth_scopes", None) or ["openid", "profile", "email"]
+        )
+
+        @app.get("/oauth/authorize")
+        async def logto_authorize_proxy(request: Request):
+            qp = dict(request.query_params)
+            # Union client scope with server defaults (so writer:read etc.
+            # always go to Logto even if the client omitted them).
+            scope_set = set((qp.get("scope", "") or "").split())
+            for s in _default_scopes:
+                scope_set.add(s)
+            forward = {
+                "response_type": qp.get("response_type", "code"),
+                "client_id": qp.get("client_id", ""),
+                "redirect_uri": qp.get("redirect_uri", ""),
+                "scope": " ".join(sorted(scope_set)),
+                "resource": _api_resource,
+            }
+            # Pass through any additional params we weren't asked to override.
+            for k in (
+                "state", "code_challenge", "code_challenge_method",
+                "prompt", "nonce", "response_mode",
+            ):
+                if qp.get(k):
+                    forward[k] = qp[k]
+            return RedirectResponse(
+                url=f"{_authorize_upstream}?{urlencode(forward)}",
+                status_code=307,
+            )
+
     @app.get("/health")
     async def health():
         return await core.health.run()
