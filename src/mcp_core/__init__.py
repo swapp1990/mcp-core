@@ -30,12 +30,16 @@ from fastapi import FastAPI, Request
 
 from .auth import LogtoAuth
 from .billing import StripeBilling
+from .dcr import LogtoDCR
 from .health import HealthCheck
 from .routes import install_routes
 from .tool_logging import ToolLogger
 
-__all__ = ["MCPCore", "LogtoAuth", "StripeBilling", "HealthCheck", "ToolLogger"]
-__version__ = "0.1.0"
+__all__ = [
+    "MCPCore", "LogtoAuth", "StripeBilling", "HealthCheck", "ToolLogger",
+    "LogtoDCR",
+]
+__version__ = "0.1.1"
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +79,10 @@ class MCPCore:
         mcp_logto_app_id: str = "",
         mcp_logto_app_secret: str = "",
         oauth_scopes: Optional[List[str]] = None,
+        # Logto Management API (enables real RFC 7591 DCR when provided)
+        logto_mgmt_app_id: str = "",
+        logto_mgmt_app_secret: str = "",
+        logto_mgmt_api_resource: str = "",
     ):
         def _env(key: str, default: str = "") -> str:
             return os.getenv(f"MCP_CORE_{key}", default)
@@ -125,6 +133,25 @@ class MCPCore:
         self._mcp_app_secret = mcp_logto_app_secret or _env("MCP_LOGTO_APP_SECRET")
         self._webhook_secret = stripe_webhook_secret or _env("STRIPE_WEBHOOK_SECRET")
         self._oauth_scopes = oauth_scopes
+
+        # Real DCR via Logto Management API (optional). If mgmt creds are
+        # provided, every /oauth/register call creates a fresh Logto app with
+        # the caller's redirect_uris baked in — fixing the dynamic-port
+        # loopback case that fake DCR can't handle.
+        _mgmt_id = logto_mgmt_app_id or _env("LOGTO_MGMT_APP_ID")
+        _mgmt_secret = logto_mgmt_app_secret or _env("LOGTO_MGMT_APP_SECRET")
+        self.dcr: Optional[LogtoDCR] = None
+        if _mgmt_id and _mgmt_secret and self.auth.endpoint:
+            self.dcr = LogtoDCR(
+                logto_endpoint=self.auth.endpoint,
+                mgmt_app_id=_mgmt_id,
+                mgmt_app_secret=_mgmt_secret,
+                mgmt_api_resource=(
+                    logto_mgmt_api_resource
+                    or _env("LOGTO_MGMT_API_RESOURCE", "")
+                ),
+                app_name_prefix=f"mcp-dcr-{self.product_name}",
+            )
 
     # ── Database ──────────────────────────────────────────
 
@@ -227,5 +254,8 @@ class MCPCore:
                 or ["openid", "profile", "email"]
             ),
             setup_proxies=True,
-            setup_fake_dynamic_registration=True,
+            # Fake DCR only if we don't have real DCR via Logto Management API.
+            # Real DCR takes priority — mcp-core's route registered by
+            # install_routes() wins over fastapi-mcp's (first match in router).
+            setup_fake_dynamic_registration=self.dcr is None,
         )
