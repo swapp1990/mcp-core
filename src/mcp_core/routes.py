@@ -88,28 +88,39 @@ def install_routes(app: FastAPI, core: Any) -> None:
                 body = {}
             return await core.dcr.register(body)
 
-    # Override fastapi-mcp's authorize proxy with one that sends `resource`
-    # (RFC 8707) instead of `audience`. Logto only issues JWT access tokens
-    # bound to the API resource when `resource=<indicator>` is present on the
-    # authorize request; `audience=` alone yields an opaque token that
-    # mcp-core's verify_token can't decode. First-match router dispatch means
-    # this route wins over fastapi-mcp's (registered later via mount_sse).
+    # Override fastapi-mcp's OAuth surface so Logto is forced to issue JWT
+    # access tokens bound to the API resource (RFC 8707). Logto requires
+    # `resource=<indicator>` on BOTH /authorize AND /token; clients like
+    # Claude Code only send `audience` (if anything), which yields opaque
+    # tokens that mcp-core's verify_token can't decode. We proxy both
+    # endpoints and inject `resource`, then override the metadata doc so
+    # clients hit our proxies instead of Logto direct.
     if core.auth.endpoint and core.auth.api_resource:
         from urllib.parse import urlencode
 
-        from fastapi.responses import RedirectResponse
+        import httpx
+        from fastapi import Response
+        from fastapi.responses import JSONResponse, RedirectResponse
 
-        _authorize_upstream = f"{core.auth.endpoint}/oidc/auth"
+        _logto = core.auth.endpoint.rstrip("/")
+        _authorize_upstream = f"{_logto}/oidc/auth"
+        _token_upstream = f"{_logto}/oidc/token"
+        _metadata_upstream = f"{_logto}/oidc/.well-known/openid-configuration"
         _api_resource = core.auth.api_resource
         _default_scopes = list(
             getattr(core, "_oauth_scopes", None) or ["openid", "profile", "email"]
         )
 
+        def _public_base_url(request: Request) -> str:
+            base = str(request.base_url).rstrip("/")
+            proto = request.headers.get("x-forwarded-proto")
+            if proto and base.startswith("http://"):
+                base = f"{proto}://{base[7:]}"
+            return base
+
         @app.get("/oauth/authorize")
         async def logto_authorize_proxy(request: Request):
             qp = dict(request.query_params)
-            # Union client scope with server defaults (so writer:read etc.
-            # always go to Logto even if the client omitted them).
             scope_set = set((qp.get("scope", "") or "").split())
             for s in _default_scopes:
                 scope_set.add(s)
@@ -120,7 +131,6 @@ def install_routes(app: FastAPI, core: Any) -> None:
                 "scope": " ".join(sorted(scope_set)),
                 "resource": _api_resource,
             }
-            # Pass through any additional params we weren't asked to override.
             for k in (
                 "state", "code_challenge", "code_challenge_method",
                 "prompt", "nonce", "response_mode",
@@ -131,6 +141,44 @@ def install_routes(app: FastAPI, core: Any) -> None:
                 url=f"{_authorize_upstream}?{urlencode(forward)}",
                 status_code=307,
             )
+
+        @app.post("/oauth/token")
+        async def logto_token_proxy(request: Request):
+            form = await request.form()
+            data = {k: v for k, v in form.items()}
+            # Logto issues opaque tokens unless `resource` is present on BOTH
+            # authorize and token. Inject it here for clients that don't.
+            data.setdefault("resource", _api_resource)
+            fwd_headers = {}
+            if "authorization" in request.headers:
+                fwd_headers["Authorization"] = request.headers["authorization"]
+            async with httpx.AsyncClient(timeout=15) as c:
+                resp = await c.post(
+                    _token_upstream, data=data, headers=fwd_headers
+                )
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                media_type=resp.headers.get("content-type", "application/json"),
+            )
+
+        @app.get("/.well-known/oauth-authorization-server")
+        async def logto_metadata_proxy(request: Request):
+            async with httpx.AsyncClient(timeout=10) as c:
+                resp = await c.get(_metadata_upstream)
+            if resp.status_code != 200:
+                return JSONResponse(
+                    {"error": "server_error"}, status_code=502
+                )
+            meta = resp.json()
+            base = _public_base_url(request)
+            meta["authorization_endpoint"] = f"{base}/oauth/authorize"
+            meta["token_endpoint"] = f"{base}/oauth/token"
+            if getattr(core, "dcr", None) is not None:
+                meta["registration_endpoint"] = f"{base}/oauth/register"
+            # Prefer a subset of scopes that matches what this server actually
+            # honors (keeps discovery docs honest for MCP clients).
+            return meta
 
     @app.get("/health")
     async def health():
