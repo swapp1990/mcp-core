@@ -11,6 +11,27 @@ This module implements real DCR: on each /oauth/register call it creates a
 fresh Logto application via the Management API with the client-supplied
 redirect_uris baked in. The returned client_id/secret can then complete
 the normal authorize + token flow against Logto directly.
+
+─── On tenant accumulation (deferred cleanup) ──────────────────────────
+Every /oauth/register call creates a NEW Logto application — we never
+reuse or update an existing one. An MCP client that disconnects and
+reconnects produces a new app each time (Claude Code does this whenever
+it picks a fresh loopback port). Over weeks of heavy use the tenant can
+accumulate hundreds of `<app_name_prefix>: ...` apps.
+
+This is correctness-safe (old apps stay valid for their original clients)
+but causes tenant bloat: slower Logto admin UI, and eventual collision
+with tenant-level app-count limits on some Logto plans.
+
+No cleanup job is shipped in this module. When it becomes a real problem,
+the intended fix is a nightly cron that lists applications via the
+Management API and deletes any whose name starts with the product's
+`app_name_prefix` and whose `lastSignInAt` (or similar activity marker,
+if exposed) is older than ~7 days. Ordering matters: delete inactive
+apps only after the client has stopped using them, or the next tool call
+will fail auth until the client re-registers. The cron belongs outside
+this library — in each product's ops scripts — since the retention
+policy is product-specific.
 """
 
 from __future__ import annotations

@@ -184,6 +184,12 @@ class MCPCore:
         """Combined auth + billing check. The main entry point for tool handlers.
 
         Returns user dict. Raises HTTPException on auth/billing failure.
+
+        On paid-tool calls the post-deduction billing result is attached to
+        the returned user as ``user["_billing"]`` = ``{"cost", "source",
+        "remaining_credits"}``. Tool handlers that want to surface a usage
+        block in their response can read it directly; callers that don't
+        care keep working unchanged (non-breaking addition).
         """
         user = await self.auth.require_auth(request, tool_name, self.db)
         if user is None:
@@ -193,7 +199,11 @@ class MCPCore:
                 "free_credits": 0,
                 "credits_used": 0,
             }
-        await self.billing.check_and_deduct(self.db, user, tool_name, request)
+        billing_info = await self.billing.check_and_deduct(
+            self.db, user, tool_name, request
+        )
+        if billing_info is not None:
+            user["_billing"] = billing_info
         return user
 
     # ── Logging shortcut ──────────────────────────────────

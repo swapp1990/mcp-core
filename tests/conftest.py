@@ -214,7 +214,11 @@ def app(core):
     async def paid_tool(request: Request):
         user = await core.auth_and_bill(request, "paid_tool")
         await core.log_tool_call(request, "paid_tool", user=user, duration_ms=50)
-        return {"result": "ok", "user_id": user["logto_user_id"]}
+        return {
+            "result": "ok",
+            "user_id": user["logto_user_id"],
+            "billing": user.get("_billing"),
+        }
 
     app.include_router(router)
     return app

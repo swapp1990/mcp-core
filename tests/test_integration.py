@@ -33,6 +33,21 @@ def test_paid_tool_valid_auth_200(client, auth_headers):
     assert data["user_id"] == "user_test_123"
 
 
+def test_paid_tool_exposes_billing_via_user_dict(client, auth_headers):
+    """auth_and_bill attaches the deduction result to user["_billing"].
+
+    Non-breaking surfacing of billing state so tool handlers can include
+    a usage block in their response without a second round-trip.
+    """
+    r = client.post("/api/mcp/paid_tool", json={}, headers=auth_headers)
+    assert r.status_code == 200
+    billing = r.json().get("billing")
+    assert billing is not None
+    assert billing["cost"] > 0
+    assert billing["source"] in {"free_credits", "stripe_metered"}
+    assert "remaining_credits" in billing
+
+
 def test_paid_tool_dev_bypass(client, dev_headers):
     r = client.post("/api/mcp/paid_tool", json={}, headers=dev_headers)
     assert r.status_code == 200
