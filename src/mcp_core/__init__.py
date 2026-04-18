@@ -239,24 +239,6 @@ class MCPCore:
             from fastapi_mcp.types import AuthConfig
         except ImportError:
             from fastapi_mcp import AuthConfig
-        from fastapi import Depends, HTTPException, Request
-
-        # Gate the MCP SSE/HTTP endpoints with a FastAPI dependency that
-        # validates the Bearer token up front. Without this, fastapi-mcp's
-        # tool-call dispatcher never sees an Authorization header and every
-        # paid tool 401s inside the route — even though the client sent a
-        # valid token on POST /mcp/messages/. This mirrors templategen's
-        # long-standing `require_mcp_token` pattern.
-        async def _require_mcp_token(request: Request):
-            payload = await self.auth.verify_token(request)
-            if payload is None:
-                raise HTTPException(
-                    status_code=401,
-                    detail="Authentication required",
-                    headers={"WWW-Authenticate": 'Bearer realm="mcp"'},
-                )
-            return payload
-
         return AuthConfig(
             issuer=f"{self.auth.endpoint}/oidc",
             oauth_metadata_url=(
@@ -277,5 +259,4 @@ class MCPCore:
             # registered first via install_routes(), so FastAPI's first-match
             # router dispatches there and fastapi-mcp's fake handler never runs.
             setup_fake_dynamic_registration=True,
-            dependencies=[Depends(_require_mcp_token)],
         )
