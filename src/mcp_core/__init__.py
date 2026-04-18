@@ -254,8 +254,10 @@ class MCPCore:
                 or ["openid", "profile", "email"]
             ),
             setup_proxies=True,
-            # Fake DCR only if we don't have real DCR via Logto Management API.
-            # Real DCR takes priority — mcp-core's route registered by
-            # install_routes() wins over fastapi-mcp's (first match in router).
-            setup_fake_dynamic_registration=self.dcr is None,
+            # Keep fake DCR on so fastapi-mcp advertises `registration_endpoint`
+            # in the auth-server metadata (MCP SDK refuses servers without it).
+            # When real DCR is enabled, mcp-core's /oauth/register route is
+            # registered first via install_routes(), so FastAPI's first-match
+            # router dispatches there and fastapi-mcp's fake handler never runs.
+            setup_fake_dynamic_registration=True,
         )
