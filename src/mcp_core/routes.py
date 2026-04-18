@@ -174,10 +174,15 @@ def install_routes(app: FastAPI, core: Any) -> None:
             base = _public_base_url(request)
             meta["authorization_endpoint"] = f"{base}/oauth/authorize"
             meta["token_endpoint"] = f"{base}/oauth/token"
-            if getattr(core, "dcr", None) is not None:
-                meta["registration_endpoint"] = f"{base}/oauth/register"
-            # Prefer a subset of scopes that matches what this server actually
-            # honors (keeps discovery docs honest for MCP clients).
+            # Always advertise /oauth/register: either real RFC 7591 DCR
+            # (when core.dcr is set) or fastapi-mcp's fake DCR (when the
+            # AuthConfig has setup_fake_dynamic_registration=True, which
+            # mcp_auth_config() enables unconditionally) handles this path.
+            # MCP SDK clients reject servers that omit registration_endpoint
+            # with "Incompatible auth server: does not support dynamic
+            # client registration" — so omitting it when only fake DCR is
+            # available silently breaks those clients.
+            meta["registration_endpoint"] = f"{base}/oauth/register"
             return meta
 
     @app.get("/health")
