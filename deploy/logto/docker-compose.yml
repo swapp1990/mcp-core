@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: logto
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: logto
+    volumes:
+      - logto-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U logto -d logto"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  logto:
+    image: ${LOGTO_IMAGE:-svhd/logto:latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: postgresql://logto:${POSTGRES_PASSWORD}@postgres:5432/logto
+      PORT: 3001
+      ADMIN_PORT: 3002
+      # ENDPOINT + ADMIN_ENDPOINT come from compose overrides (local vs prod).
+      # Logto uses ADMIN_ENDPOINT internally for service-to-service JWKS fetch
+      # (koa-auth.getAdminTenantTokenValidationSet), so its value must resolve
+      # from inside the container, not just from the outside public URL.
+    entrypoint: ["sh", "-c", "npm run cli db seed -- --swe && npm start"]
+
+volumes:
+  logto-pg-data:

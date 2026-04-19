@@ -1,0 +1,28 @@
+# Production override: exposes Logto behind host nginx.
+# Host nginx at auth.swapp1990.org proxies:
+#   443 → user-facing: 127.0.0.1:3011 (container 3001)
+#   443 /admin/* → admin console: 127.0.0.1:3012 (container 3002)
+#
+# Usage on prod server:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  logto:
+    environment:
+      TRUST_PROXY_HEADER: 1
+      ENDPOINT: https://auth.swapp1990.org
+      # Admin on the same host, different port. The admin SPA in OSS
+      # hardcodes /api/* fetches — so the origin MUST be a clean
+      # "host[:port]" with no path prefix for SPA routing + tenant
+      # resolution to work in the browser.
+      ADMIN_ENDPOINT: https://auth.swapp1990.org:8443
+    ports:
+      - "127.0.0.1:3011:3001"
+      - "127.0.0.1:3012:3002"
+    # Logto does service-to-service fetches against ADMIN_ENDPOINT from inside
+    # the container (see koa-auth.getAdminTenantTokenValidationSet). On prod
+    # the hostname resolves publicly, but host-gateway keeps the round-trip
+    # local (container -> host nginx:8443 -> container) and avoids dependency
+    # on external DNS / egress being healthy.
+    extra_hosts:
+      - "auth.swapp1990.org:host-gateway"

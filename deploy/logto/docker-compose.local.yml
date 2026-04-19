@@ -1,0 +1,30 @@
+# Local-dev override: run Logto on http://localhost:3011 (no TLS, no proxy)
+# so mcp-core integration tests can hit it directly.
+#
+# Usage:
+#   cd deploy/logto
+#   cp .env.example .env    # set POSTGRES_PASSWORD
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#
+# Teardown:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml down -v
+# (the -v wipes the db volume — fresh Logto on next boot)
+
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"  # optional: direct DB access for debugging
+
+  logto:
+    # Map host:container 1:1 so ENDPOINT=http://localhost:3001 works from both
+    # the host (for tests) AND from inside the container (when Logto performs
+    # service-to-service calls to its own admin JWKS — see koa-auth.ts,
+    # getAdminTenantTokenValidationSet). The prod compose uses nginx + public
+    # URLs so this issue only bites in local dev.
+    ports:
+      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:3002:3002"
+    environment:
+      ENDPOINT: http://localhost:3001
+      ADMIN_ENDPOINT: http://localhost:3002
+      TRUST_PROXY_HEADER: 0

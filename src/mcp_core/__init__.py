@@ -83,6 +83,10 @@ class MCPCore:
         logto_mgmt_app_id: str = "",
         logto_mgmt_app_secret: str = "",
         logto_mgmt_api_resource: str = "",
+        # Set this when Management tokens are issued on a different origin than
+        # `logto_endpoint` (Logto OSS self-host with admin on a separate port).
+        # Cloud deployments leave this empty.
+        logto_mgmt_token_endpoint: str = "",
     ):
         def _env(key: str, default: str = "") -> str:
             return os.getenv(f"MCP_CORE_{key}", default)
@@ -149,6 +153,10 @@ class MCPCore:
                 mgmt_api_resource=(
                     logto_mgmt_api_resource
                     or _env("LOGTO_MGMT_API_RESOURCE", "")
+                ),
+                mgmt_token_endpoint=(
+                    logto_mgmt_token_endpoint
+                    or _env("LOGTO_MGMT_TOKEN_ENDPOINT", "")
                 ),
                 app_name_prefix=f"mcp-dcr-{self.product_name}",
             )

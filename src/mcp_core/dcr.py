@@ -56,6 +56,7 @@ class LogtoDCR:
         mgmt_app_id: str,
         mgmt_app_secret: str,
         mgmt_api_resource: str = "",
+        mgmt_token_endpoint: str = "",
         app_name_prefix: str = "mcp-dcr",
         timeout: float = 10.0,
         http_client_factory: Optional[Any] = None,
@@ -68,6 +69,17 @@ class LogtoDCR:
         self.mgmt_app_id = mgmt_app_id
         self.mgmt_app_secret = mgmt_app_secret
         self.mgmt_api_resource = mgmt_api_resource or f"{self.endpoint}/api"
+        # In Logto Cloud, Management-API tokens are issued on the same host
+        # as user-facing OIDC. In OSS self-hosted, the admin tenant runs on a
+        # separate endpoint (ADMIN_ENDPOINT env var) and only that tenant's
+        # /oidc/token will accept the M2M credentials provisioned for the
+        # Management API role. Callers pass the admin URL explicitly in that
+        # case; otherwise we default to the same host as `endpoint`.
+        self.mgmt_token_endpoint = (
+            mgmt_token_endpoint.rstrip("/")
+            if mgmt_token_endpoint
+            else f"{self.endpoint}/oidc/token"
+        )
         self.app_name_prefix = app_name_prefix
         self.timeout = timeout
         self._client_factory = http_client_factory or (
@@ -80,7 +92,7 @@ class LogtoDCR:
     async def _fetch_mgmt_token(self) -> str:
         async with self._client_factory() as client:
             resp = await client.post(
-                f"{self.endpoint}/oidc/token",
+                self.mgmt_token_endpoint,
                 auth=(self.mgmt_app_id, self.mgmt_app_secret),
                 data={
                     "grant_type": "client_credentials",
