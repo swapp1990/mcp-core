@@ -147,8 +147,12 @@ def install_routes(app: FastAPI, core: Any) -> None:
             form = await request.form()
             data = {k: v for k, v in form.items()}
             # Logto issues opaque tokens unless `resource` is present on BOTH
-            # authorize and token. Inject it here for clients that don't.
-            data.setdefault("resource", _api_resource)
+            # authorize and token. Force-set to the registered indicator:
+            # clients normalize URLs differently (Claude Code appends a
+            # trailing slash on origin URIs), and Logto compares byte-for-byte
+            # — mismatches surface as "resource indicator is missing, or
+            # unknown". The authorize proxy above already does the same.
+            data["resource"] = _api_resource
             fwd_headers = {}
             if "authorization" in request.headers:
                 fwd_headers["Authorization"] = request.headers["authorization"]
