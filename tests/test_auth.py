@@ -245,3 +245,45 @@ def test_oauth_metadata_base_url_strips_trailing_slash(auth):
         base_url="https://myserver.example.com/"
     )
     assert meta["authorization_servers"] == ["https://myserver.example.com"]
+
+
+# ── Read-only-tool auth with a real-pymongo-like db ──────
+#
+# Regression guard for the old `if payload and db:` bug: pymongo's Database
+# raises NotImplementedError on bool(), so any truthiness check crashed the
+# read-only path on authenticated calls. Caught mid-migration on writer-v2
+# where `get_credits` 500'd under JWT + live Mongo. Verified in-test with a
+# MagicMock that replicates the specific exception behavior pymongo ships.
+
+class _PymongoLikeDatabase:
+    """Stand-in for pymongo.database.Database: raises on bool() exactly as
+    pymongo does (https://pymongo.readthedocs.io/en/stable/faq.html#why-does-pymongo-add-an-id-field-to-all-of-my-documents)."""
+
+    def __init__(self, backing):
+        self._backing = backing
+
+    def __bool__(self):
+        raise NotImplementedError(
+            "Database objects do not implement truth value testing or bool(). "
+            "Please compare with None instead: database is not None"
+        )
+
+    def __getitem__(self, name):
+        return self._backing[name]
+
+
+@pytest.mark.asyncio
+async def test_read_only_tool_with_pymongo_db_does_not_crash_on_truthiness(auth, make_token, mock_db):
+    """A read-only-tool call with a valid JWT and a pymongo-like Database
+    must not raise `NotImplementedError`. Guards against reintroducing the
+    `if payload and db:` idiom — the correct idiom is `db is not None`."""
+    token = make_token(sub="user_readonly")
+    req = _fake_request(token)
+    # Wrap mock_db so bool() raises, exactly like real pymongo
+    pymongo_like_db = _PymongoLikeDatabase(mock_db)
+
+    # If the read-only branch does `if payload and db:`, this raises NotImplementedError.
+    # The fix is `if payload and db is not None:`.
+    user = await auth.require_auth(req, "free_tool", pymongo_like_db)
+    assert user is not None
+    assert user["logto_user_id"] == "user_readonly"

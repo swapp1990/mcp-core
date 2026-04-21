@@ -186,7 +186,11 @@ class LogtoAuth:
         """
         if tool_name in self.read_only_tools:
             payload = await self.verify_token(request)
-            if payload and db:
+            # pymongo Database raises NotImplementedError on bool() (historical
+            # truthiness gotcha). The paid-tool branch below uses the correct
+            # `db is not None` — keep read-only consistent so authenticated
+            # read-only calls don't 500 on the first call.
+            if payload and db is not None:
                 return await self.get_or_create_user(db, payload)
             return None
 
