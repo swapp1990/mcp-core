@@ -35,6 +35,9 @@ class Product:
     api_resource: str               # RFC 8707 indicator
     api_resource_name: str
     scopes: List[str]               # resource-scoped scopes
+    mcp_dcr_app_name: str = ""      # M2M "MCP-DCR" app: master key mcp-core.LogtoDCR
+                                    # uses to register per-client DCR apps via
+                                    # Management API. Empty → skip.
 
 
 TEMPLATEGEN = Product(
@@ -51,6 +54,7 @@ TEMPLATEGEN = Product(
     api_resource="https://api.designforyou.app",
     api_resource_name="DesignForYou API",
     scopes=["designforyou:read", "designforyou:generate"],
+    mcp_dcr_app_name="DesignForYou MCP-DCR",
 )
 
 WRITER = Product(
@@ -64,9 +68,10 @@ WRITER = Product(
         "http://localhost:3000",
         "https://writer.swapp1990.org",
     ],
-    api_resource="https://api.writer.swapp1990.org",
+    api_resource="https://writer.swapp1990.org",
     api_resource_name="Writer API",
-    scopes=["writer:read", "writer:write"],
+    scopes=["writer:read", "writer:generate"],
+    mcp_dcr_app_name="Writer MCP-DCR",
 )
 
 # All products share the seeded m-default M2M app for DCR — it already has
@@ -277,22 +282,41 @@ def main() -> int:
             "redirectUris": p.redirect_uris,
             "postLogoutRedirectUris": p.post_logout_uris,
         })
-        summary[p.name] = {
+        entry: Dict[str, Any] = {
             "spa_app_id": spa["id"],
             "api_resource": p.api_resource,
         }
+        # M2M MCP-DCR app: mcp-core.LogtoDCR uses this as the bearer-holder
+        # for Management API calls that register per-client DCR apps on
+        # demand (one per Claude Code / MCP Inspector install). It needs
+        # the same default-tenant role m-default has.
+        if p.mcp_dcr_app_name:
+            mcp = ensure_app(m, p.mcp_dcr_app_name, "MachineToMachine", {
+                "redirectUris": [],
+                "postLogoutRedirectUris": [],
+            })
+            ensure_m2m_role_assignment(m, mcp["id"])
+            entry["mcp_app_id"] = mcp["id"]
+            # `secret` only comes back on create; when the app already
+            # existed, operator reads it from postgres.
+            entry["mcp_app_secret"] = mcp.get("secret", "")
+        summary[p.name] = entry
 
     print("\n=== paste into .env files ===\n")
     print("# DCR is shared: all products use the seeded m-default app.")
-    print(f"# Read the secret from postgres once:")
+    print(f"# Read secrets from postgres when the app already existed:")
     print(f"#   docker exec logto-docker-postgres-1 psql -U logto -d logto -t -A \\")
-    print(f"#     -c \"SELECT secret FROM applications WHERE id='m-default';\"")
+    print(f"#     -c \"SELECT id,secret FROM applications WHERE id IN ('m-default', '<mcp-app-id>');\"")
     print()
     for name, v in summary.items():
         print(f"# --- {name} ---")
         print(f"LOGTO_ENDPOINT=https://auth.swapp1990.org")
         print(f"LOGTO_APP_ID={v['spa_app_id']}")
         print(f"LOGTO_API_RESOURCE={v['api_resource']}")
+        if v.get("mcp_app_id"):
+            print(f"MCP_LOGTO_APP_ID={v['mcp_app_id']}")
+            secret = v.get("mcp_app_secret") or "<read from postgres>"
+            print(f"MCP_LOGTO_APP_SECRET={secret}")
         print(f"LOGTO_MGMT_APP_ID={SHARED_DCR_APP_ID}")
         print(f"LOGTO_MGMT_APP_SECRET=<m-default secret from above>")
         print(f"LOGTO_MGMT_TOKEN_ENDPOINT=https://auth.swapp1990.org:8443/oidc/token")
