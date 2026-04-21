@@ -110,6 +110,7 @@ def install_routes(app: FastAPI, core: Any) -> None:
         _default_scopes = list(
             getattr(core, "_oauth_scopes", None) or ["openid", "profile", "email"]
         )
+        _branded_sign_in_url = getattr(core, "_branded_sign_in_url", "") or ""
 
         def _public_base_url(request: Request) -> str:
             base = str(request.base_url).rstrip("/")
@@ -121,6 +122,30 @@ def install_routes(app: FastAPI, core: Any) -> None:
         @app.get("/oauth/authorize")
         async def logto_authorize_proxy(request: Request):
             qp = dict(request.query_params)
+
+            # Branded inline sign-in: if the product configured a sign-in
+            # URL and we haven't already bounced through it this round-trip,
+            # redirect the user there. The product's page handles auth, sets
+            # a Logto session cookie on the apex domain, then redirects back
+            # with signed_in=1. On retry, Logto sees the session and issues
+            # a code silently. signed_in=1 is NOT a security bypass — the
+            # retry still forwards to Logto, which requires a valid session
+            # cookie to proceed.
+            if _branded_sign_in_url and qp.get("signed_in") != "1":
+                retry_qp = {k: v for k, v in qp.items() if k != "signed_in"}
+                retry_qp["signed_in"] = "1"
+                base = _public_base_url(request)
+                retry_url = f"{base}/oauth/authorize?{urlencode(retry_qp)}"
+                sep = "&" if "?" in _branded_sign_in_url else "?"
+                sign_in = (
+                    f"{_branded_sign_in_url}{sep}"
+                    f"{urlencode({'return_to': retry_url})}"
+                )
+                return RedirectResponse(url=sign_in, status_code=302)
+
+            # Strip our own marker so it doesn't leak into Logto's request.
+            qp.pop("signed_in", None)
+
             scope_set = set((qp.get("scope", "") or "").split())
             for s in _default_scopes:
                 scope_set.add(s)

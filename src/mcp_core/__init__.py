@@ -87,6 +87,15 @@ class MCPCore:
         # `logto_endpoint` (Logto OSS self-host with admin on a separate port).
         # Cloud deployments leave this empty.
         logto_mgmt_token_endpoint: str = "",
+        # When set, /oauth/authorize bounces unauthenticated users here for
+        # product-branded inline sign-in instead of showing Logto's hosted
+        # page. The product is responsible for implementing this URL as a
+        # page that (1) accepts ?return_to=<url>, (2) validates it is
+        # same-origin, (3) runs the product's sign-in UI, (4) redirects
+        # the browser back to return_to on success. Logto's session cookie
+        # must be emitted with `Domain=.<apex>` so the retry carries it
+        # to /oauth/authorize. Leave empty to keep using Logto's hosted UI.
+        branded_sign_in_url: str = "",
     ):
         def _env(key: str, default: str = "") -> str:
             return os.getenv(f"MCP_CORE_{key}", default)
@@ -137,6 +146,9 @@ class MCPCore:
         self._mcp_app_secret = mcp_logto_app_secret or _env("MCP_LOGTO_APP_SECRET")
         self._webhook_secret = stripe_webhook_secret or _env("STRIPE_WEBHOOK_SECRET")
         self._oauth_scopes = oauth_scopes
+        self._branded_sign_in_url = (
+            branded_sign_in_url or _env("BRANDED_SIGN_IN_URL", "")
+        )
 
         # Real DCR via Logto Management API (optional). If mgmt creds are
         # provided, every /oauth/register call creates a fresh Logto app with
