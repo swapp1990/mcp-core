@@ -15,18 +15,14 @@ Your MCP Server  (product-specific tool handlers)
 
 ## Install
 
-The `mcp-core` name on PyPI is held by an unrelated project, so install from this repo:
-
 ```bash
-pip install git+https://github.com/swapp1990/mcp-core@v0.2.0
+pip install mcp-core-auth
 ```
 
-Or pin in `pyproject.toml`:
+The package is published as `mcp-core-auth` on PyPI (the bare `mcp-core` name is held by an unrelated project), but the import path is unchanged:
 
-```toml
-dependencies = [
-  "mcp-core @ git+https://github.com/swapp1990/mcp-core@v0.2.0",
-]
+```python
+from mcp_core import MCPCore
 ```
 
 ## Quick Start

@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mcp-core"
-version = "0.2.0"
+name = "mcp-core-auth"
+version = "0.2.1"
 description = "Auth, billing, and logging infrastructure for MCP-first servers."
 readme = "README.md"
 license = "MIT"
