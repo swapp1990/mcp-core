@@ -1,5 +1,9 @@
 # mcp-core
 
+[![Release](https://img.shields.io/github/v/release/swapp1990/mcp-core)](https://github.com/swapp1990/mcp-core/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+
 Auth, billing, and logging infrastructure for MCP-first servers. Sits between your product code and [fastapi-mcp](https://github.com/tadata-org/fastapi-mcp).
 
 ```
@@ -11,8 +15,18 @@ Your MCP Server  (product-specific tool handlers)
 
 ## Install
 
+The `mcp-core` name on PyPI is held by an unrelated project, so install from this repo:
+
 ```bash
-pip install mcp-core
+pip install git+https://github.com/swapp1990/mcp-core@v0.2.0
+```
+
+Or pin in `pyproject.toml`:
+
+```toml
+dependencies = [
+  "mcp-core @ git+https://github.com/swapp1990/mcp-core@v0.2.0",
+]
 ```
 
 ## Quick Start
@@ -91,6 +105,12 @@ pytest tests/ -v
 # Live tests (requires .env.live with real credentials)
 RUN_LIVE_TESTS=1 pytest tests/live/ -v
 ```
+
+## Contributing
+
+Bug reports and PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
+Auth provider abstraction (Auth0, Keycloak, generic OIDC) is tracked in [#1](https://github.com/swapp1990/mcp-core/issues/1) — discussion-first.
 
 ## License
 
