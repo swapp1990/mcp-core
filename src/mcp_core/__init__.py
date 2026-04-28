@@ -40,7 +40,11 @@ __all__ = [
     "MCPCore", "LogtoAuth", "StripeBilling", "HealthCheck", "ToolLogger",
     "LogtoDCR", "mount_mcp",
 ]
-__version__ = "0.1.3"
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("mcp-core-auth")
+except Exception:
+    __version__ = "0.0.0+unknown"
 
 logger = logging.getLogger(__name__)
 
