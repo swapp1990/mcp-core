@@ -32,14 +32,15 @@ from .auth import LogtoAuth
 from .billing import StripeBilling
 from .dcr import LogtoDCR
 from .health import HealthCheck
+from .mcp_mount import mount_mcp
 from .routes import install_routes
 from .tool_logging import ToolLogger
 
 __all__ = [
     "MCPCore", "LogtoAuth", "StripeBilling", "HealthCheck", "ToolLogger",
-    "LogtoDCR",
+    "LogtoDCR", "mount_mcp",
 ]
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +258,35 @@ class MCPCore:
     def install_routes(self, app: FastAPI) -> None:
         """Register standard routes: /health, /api/billing/credits, webhook, OAuth metadata."""
         install_routes(app, self)
+
+    def mount_mcp(
+        self,
+        app: FastAPI,
+        *,
+        name: str,
+        description: str = "",
+        tags=("mcp",),
+        legacy_sse: bool = True,
+        mount_path_legacy: str = "/mcp",
+        mount_path_v2: str = "/mcp/v2",
+        instructions: str = "",
+    ) -> Dict[str, Any]:
+        """Mount MCP transports (legacy SSE + stateless HTTP).
+
+        See `mcp_core.mcp_mount.mount_mcp` for full docs. This method
+        forwards `self` as `core` so callers don't repeat it.
+        """
+        return mount_mcp(
+            app,
+            core=self,
+            name=name,
+            description=description,
+            tags=tags,
+            legacy_sse=legacy_sse,
+            mount_path_legacy=mount_path_legacy,
+            mount_path_v2=mount_path_v2,
+            instructions=instructions,
+        )
 
     def mcp_auth_config(self) -> Any:
         """Return an AuthConfig for fastapi-mcp.
