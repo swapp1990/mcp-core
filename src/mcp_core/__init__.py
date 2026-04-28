@@ -5,17 +5,17 @@ Usage:
     from mcp_core import MCPCore
 
     core = MCPCore(
-        product_name="voiceforge",
-        logto_endpoint="https://fo9pu9.logto.app",
-        logto_api_resource="https://api.voiceforge.app",
+        product_name="myapp",
+        logto_endpoint="https://your-tenant.logto.app",   # or self-hosted: https://auth.example.com
+        logto_api_resource="https://api.example.com",
         mongodb_uri="mongodb+srv://...",
-        db_name="voicegen",
+        db_name="myapp",
         stripe_secret_key="sk_test_...",
         stripe_price_id="price_...",
-        stripe_meter_event="voice_tool_calls",
+        stripe_meter_event="tool_calls",
         free_credits=25,
-        tool_costs={"browse_voices": 0, "narrate_text": 2},
-        read_only_tools={"browse_voices"},
+        tool_costs={"browse": 0, "generate": 2},
+        read_only_tools={"browse"},
     )
 
     # In your tool handler:

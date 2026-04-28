@@ -203,7 +203,7 @@ def _public_base_url(request: Request) -> str:
     return base
 ```
 
-Production deployments sit behind a reverse proxy (nginx/Caddy) that terminates TLS. FastAPI sees the inbound request as `http://…` on its internal port. If we naively use `request.base_url` to build the `authorization_endpoint` URL we return in metadata, clients end up redirected to `http://writer.swapp1990.org/oauth/authorize` — which fails at the HTTPS-only upstream proxy.
+Production deployments sit behind a reverse proxy (nginx/Caddy) that terminates TLS. FastAPI sees the inbound request as `http://…` on its internal port. If we naively use `request.base_url` to build the `authorization_endpoint` URL we return in metadata, clients end up redirected to `http://your-app.example.com/oauth/authorize` — which fails at the HTTPS-only upstream proxy.
 
 Reading `x-forwarded-proto` (set by the reverse proxy) and upgrading `http://` → `https://` produces the correct public URL. This is infrastructure-facing plumbing that every MCP server needs, which is exactly why it belongs in mcp-core.
 

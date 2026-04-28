@@ -1,7 +1,12 @@
 # Production override: exposes Logto behind host nginx.
-# Host nginx at auth.swapp1990.org proxies:
+# Host nginx at $LOGTO_DOMAIN proxies:
 #   443 → user-facing: 127.0.0.1:3011 (container 3001)
-#   443 /admin/* → admin console: 127.0.0.1:3012 (container 3002)
+#   8443 → admin console: 127.0.0.1:3012 (container 3002)
+#
+# Required env vars (set in .env next to the compose files):
+#   LOGTO_DOMAIN          e.g. auth.example.com
+#   LOGTO_ENDPOINT        e.g. https://auth.example.com
+#   LOGTO_ADMIN_ENDPOINT  e.g. https://auth.example.com:8443
 #
 # Usage on prod server:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
@@ -10,12 +15,12 @@ services:
   logto:
     environment:
       TRUST_PROXY_HEADER: 1
-      ENDPOINT: https://auth.swapp1990.org
+      ENDPOINT: ${LOGTO_ENDPOINT:?LOGTO_ENDPOINT required, e.g. https://auth.example.com}
       # Admin on the same host, different port. The admin SPA in OSS
       # hardcodes /api/* fetches — so the origin MUST be a clean
       # "host[:port]" with no path prefix for SPA routing + tenant
       # resolution to work in the browser.
-      ADMIN_ENDPOINT: https://auth.swapp1990.org:8443
+      ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:?LOGTO_ADMIN_ENDPOINT required, e.g. https://auth.example.com:8443}
     ports:
       - "127.0.0.1:3011:3001"
       - "127.0.0.1:3012:3002"
@@ -25,4 +30,4 @@ services:
     # local (container -> host nginx:8443 -> container) and avoids dependency
     # on external DNS / egress being healthy.
     extra_hosts:
-      - "auth.swapp1990.org:host-gateway"
+      - "${LOGTO_DOMAIN:?LOGTO_DOMAIN required, e.g. auth.example.com}:host-gateway"

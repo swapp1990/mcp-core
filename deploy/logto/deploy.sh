@@ -1,25 +1,31 @@
 #!/usr/bin/env bash
-# Deploy self-hosted Logto to the prod server.
+# Deploy self-hosted Logto to your prod server.
 #
 # Idempotent: run it any time to sync the current docker-compose files to
 # /opt/apps/logto-docker/ and `up -d` the stack. Existing data in the
 # logto-pg-data volume is preserved across deploys.
 #
-# Prereqs on local:
-#   - ssh key at ~/.ssh/moltbot_rsa
+# Required env (no defaults — every operator runs their own server):
+#   LOGTO_SERVER     ssh target, e.g. root@1.2.3.4
+#   LOGTO_LIVE_URL   public URL, e.g. https://auth.example.com
+#   LOGTO_SSH_KEY    path to ssh private key (default: ~/.ssh/id_rsa)
 #
 # Prereqs on server (/opt/apps/logto-docker/), first run only:
 #   - docker + docker compose v2
-#   - .env file with POSTGRES_PASSWORD set (created below if missing)
+#   - .env file with LOGTO_DOMAIN, LOGTO_ENDPOINT, LOGTO_ADMIN_ENDPOINT,
+#     POSTGRES_PASSWORD set (see .env.example; generated below if missing)
 #   - host nginx vhost pointed at 127.0.0.1:3011 / 127.0.0.1:3012
-#   - DNS A record: auth.swapp1990.org -> this server's public IP
+#     (render nginx-auth.conf.template with your domain)
+#   - DNS A record: <your-domain> -> this server's public IP
 
 set -euo pipefail
 
-SERVER="${LOGTO_SERVER:-root@64.225.33.214}"
-SSH_KEY="${LOGTO_SSH_KEY:-$HOME/.ssh/moltbot_rsa}"
+: "${LOGTO_SERVER:?LOGTO_SERVER required, e.g. root@1.2.3.4}"
+: "${LOGTO_LIVE_URL:?LOGTO_LIVE_URL required, e.g. https://auth.example.com}"
+SERVER="$LOGTO_SERVER"
+SSH_KEY="${LOGTO_SSH_KEY:-$HOME/.ssh/id_rsa}"
 REMOTE_DIR="/opt/apps/logto-docker"
-LIVE_URL="${LOGTO_LIVE_URL:-https://auth.swapp1990.org}"
+LIVE_URL="$LOGTO_LIVE_URL"
 
 cd "$(dirname "$0")"
 
@@ -31,10 +37,19 @@ scp -i "$SSH_KEY" \
     "$SERVER:$REMOTE_DIR/"
 
 echo "==> Ensuring .env exists on server (only generated on first deploy)"
+DOMAIN_FROM_URL="${LIVE_URL#https://}"
+DOMAIN_FROM_URL="${DOMAIN_FROM_URL#http://}"
+DOMAIN_FROM_URL="${DOMAIN_FROM_URL%%/*}"
 ssh -i "$SSH_KEY" "$SERVER" "
   cd $REMOTE_DIR
   if [ ! -f .env ]; then
-    echo 'POSTGRES_PASSWORD=\$(openssl rand -hex 32)' > .env
+    PG=\$(openssl rand -hex 32)
+    cat > .env <<EOF
+LOGTO_DOMAIN=$DOMAIN_FROM_URL
+LOGTO_ENDPOINT=$LIVE_URL
+LOGTO_ADMIN_ENDPOINT=$LIVE_URL:8443
+POSTGRES_PASSWORD=\$PG
+EOF
     chmod 600 .env
     echo '  generated new .env — first deploy'
   else

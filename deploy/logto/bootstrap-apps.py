@@ -1,16 +1,19 @@
 """
-Bulk-create the apps / API resources / connectors this org needs in a
+Bulk-create the apps / API resources / connectors your org needs in a
 freshly-installed self-hosted Logto. Idempotent: re-runs skip existing
 records (match by name for apps, indicator for resources).
 
 Usage:
     py bootstrap-apps.py \
-        --endpoint https://auth.swapp1990.org \
-        --admin https://auth.swapp1990.org:8443 \
+        --endpoint https://auth.example.com \
+        --admin https://auth.example.com:8443 \
+        --config bootstrap-apps.json \
         --mgmt-secret "$(ssh ... psql ... 'SELECT secret FROM applications WHERE id=...')"
 
-Prints a summary of all created/found IDs + secrets at the end so the
-values can be pasted into each product's .env.
+Where bootstrap-apps.json describes your products (see
+bootstrap-apps.example.json for the schema). Prints a summary of all
+created/found IDs + secrets at the end so the values can be pasted into
+each product's .env.
 """
 
 from __future__ import annotations
@@ -40,46 +43,36 @@ class Product:
                                     # Management API. Empty → skip.
 
 
-TEMPLATEGEN = Product(
-    name="templategen",
-    spa_app_name="DesignForYou (templategen)",
-    redirect_uris=[
-        "http://localhost:5176/callback",
-        "https://designforyou.swapp1990.org/callback",
-    ],
-    post_logout_uris=[
-        "http://localhost:5176",
-        "https://designforyou.swapp1990.org",
-    ],
-    api_resource="https://api.designforyou.app",
-    api_resource_name="DesignForYou API",
-    scopes=["designforyou:read", "designforyou:generate"],
-    mcp_dcr_app_name="DesignForYou MCP-DCR",
-)
-
-WRITER = Product(
-    name="writer-v2",
-    spa_app_name="Autonomous Writer",
-    redirect_uris=[
-        "http://localhost:3000/callback",
-        "https://writer.swapp1990.org/callback",
-    ],
-    post_logout_uris=[
-        "http://localhost:3000",
-        "https://writer.swapp1990.org",
-    ],
-    api_resource="https://writer.swapp1990.org",
-    api_resource_name="Writer API",
-    scopes=["writer:read", "writer:generate"],
-    mcp_dcr_app_name="Writer MCP-DCR",
-)
-
 # All products share the seeded m-default M2M app for DCR — it already has
 # the admin-tenant 'machine:mapi:default' role that can't be assigned to
 # default-tenant apps. Per-product M2M creds would be cleaner but require
 # admin-tenant app creation, which means hitting the admin-tenant
-# Management API separately. Not worth the complexity for two products.
+# Management API separately. Not worth the complexity for a handful of
+# products.
 SHARED_DCR_APP_ID = "m-default"
+
+
+def load_products(config_path: str) -> List[Product]:
+    """Load product definitions from a JSON config file.
+
+    See bootstrap-apps.example.json for the schema. Each entry maps 1:1
+    onto the Product dataclass fields; mcp_dcr_app_name is optional.
+    """
+    with open(config_path) as f:
+        data = json.load(f)
+    out: List[Product] = []
+    for p in data.get("products", []):
+        out.append(Product(
+            name=p["name"],
+            spa_app_name=p["spa_app_name"],
+            redirect_uris=p["redirect_uris"],
+            post_logout_uris=p["post_logout_uris"],
+            api_resource=p["api_resource"],
+            api_resource_name=p["api_resource_name"],
+            scopes=p.get("scopes", []),
+            mcp_dcr_app_name=p.get("mcp_dcr_app_name", ""),
+        ))
+    return out
 
 
 # ─── Management API client ─────────────────────────────────────────────
@@ -161,7 +154,7 @@ def ensure_api_resource(m: Mgmt, indicator: str, name: str) -> Dict[str, Any]:
     r = m.post("/api/resources", {
         "name": name,
         "indicator": indicator,
-        "accessTokenTtl": 3600,
+        "accessTokenTtl": 604800,
     })
     print(f"  [new]  resource '{name}'             id={r['id']}")
     return r
@@ -205,7 +198,10 @@ def ensure_ses_connector(m: Mgmt) -> None:
         return
     access_key = os.environ.get("SES_ACCESS_KEY_ID")
     secret_key = os.environ.get("SES_SECRET_ACCESS_KEY")
-    from_email = os.environ.get("SES_FROM", "swapp19902@gmail.com")
+    from_email = os.environ.get("SES_FROM")
+    if not from_email:
+        print("  [skip] SES_FROM not set in env (sender email address)")
+        return
     region = os.environ.get("SES_REGION", "us-west-2")
     if not access_key or not secret_key:
         print("  [skip] SES_ACCESS_KEY_ID / SES_SECRET_ACCESS_KEY not set in env")
@@ -213,7 +209,7 @@ def ensure_ses_connector(m: Mgmt) -> None:
     templates = [
         {
             "usageType": ut,
-            "subject": f"[DesignForYou] {ut} code",
+            "subject": f"Your {ut} code",
             "content": "Your verification code is {{code}}. Expires in 10 minutes.",
         }
         for ut in (
@@ -261,20 +257,25 @@ def ensure_m2m_role_assignment(m: Mgmt, app_id: str, role_name: str = "machine:m
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--endpoint", required=True)
-    ap.add_argument("--admin", required=True)
+    ap.add_argument("--endpoint", required=True, help="e.g. https://auth.example.com")
+    ap.add_argument("--admin", required=True, help="e.g. https://auth.example.com:8443")
+    ap.add_argument("--config", required=True, help="Path to bootstrap-apps.json (see *.example.json)")
     ap.add_argument("--mgmt-id", default="m-default")
     ap.add_argument("--mgmt-secret", required=True)
     args = ap.parse_args()
 
     m = Mgmt(args.endpoint, args.admin, args.mgmt_id, args.mgmt_secret)
+    products = load_products(args.config)
+    if not products:
+        print(f"No products defined in {args.config} — nothing to do.")
+        return 0
 
     summary: Dict[str, Dict[str, Any]] = {}
 
     # Connectors live in default tenant.
     ensure_ses_connector(m)
 
-    for p in (TEMPLATEGEN, WRITER):
+    for p in products:
         print(f"\n=== {p.name} ===")
         api_r = ensure_api_resource(m, p.api_resource, p.api_resource_name)
         ensure_scopes_on_resource(m, api_r["id"], p.scopes)
@@ -310,7 +311,7 @@ def main() -> int:
     print()
     for name, v in summary.items():
         print(f"# --- {name} ---")
-        print(f"LOGTO_ENDPOINT=https://auth.swapp1990.org")
+        print(f"LOGTO_ENDPOINT={args.endpoint}")
         print(f"LOGTO_APP_ID={v['spa_app_id']}")
         print(f"LOGTO_API_RESOURCE={v['api_resource']}")
         if v.get("mcp_app_id"):
@@ -319,7 +320,7 @@ def main() -> int:
             print(f"MCP_LOGTO_APP_SECRET={secret}")
         print(f"LOGTO_MGMT_APP_ID={SHARED_DCR_APP_ID}")
         print(f"LOGTO_MGMT_APP_SECRET=<m-default secret from above>")
-        print(f"LOGTO_MGMT_TOKEN_ENDPOINT=https://auth.swapp1990.org:8443/oidc/token")
+        print(f"LOGTO_MGMT_TOKEN_ENDPOINT={args.admin}/oidc/token")
         print()
 
     return 0

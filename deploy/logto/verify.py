@@ -13,7 +13,7 @@ Usage:
     python verify.py
         # assumes local compose is running on 3001/3002
 
-    python verify.py --endpoint https://auth.swapp1990.org --admin https://auth.swapp1990.org/admin
+    python verify.py --endpoint https://auth.example.com --admin https://auth.example.com:8443
         # run against a prod instance (needs seeded m-default creds via --mgmt)
 
 The script reads seeded m-default / m-admin secrets from Postgres when

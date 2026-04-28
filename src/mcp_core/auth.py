@@ -23,8 +23,8 @@ class LogtoAuth:
     """Logto JWT validation and user provisioning.
 
     Args:
-        endpoint: Logto tenant URL (e.g. "https://fo9pu9.logto.app").
-        api_resource: Logto API resource / audience (e.g. "https://api.voiceforge.app").
+        endpoint: Logto tenant URL (e.g. "https://your-tenant.logto.app" or self-hosted "https://auth.example.com").
+        api_resource: Logto API resource / audience (e.g. "https://api.example.com").
         free_credits: Credits granted to new users on first auth.
         dev_bypass: Accept "Bearer dev-bypass" as a valid token (local dev only).
         dev_user_id: User ID returned for dev-bypass tokens.

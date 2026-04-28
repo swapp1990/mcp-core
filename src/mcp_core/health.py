@@ -21,7 +21,7 @@ class HealthCheck:
     """Composable health check builder.
 
     Usage:
-        health = HealthCheck(product_name="voiceforge")
+        health = HealthCheck(product_name="myapp")
         health.add_check("db", lambda: db.command("ping"))
         health.add_check("tts", lambda: httpx.get(url))
 

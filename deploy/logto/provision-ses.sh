@@ -6,7 +6,7 @@
 #
 # Usage:
 #   AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_DEFAULT_REGION=us-west-2 \
-#     ./provision-ses.sh swapp1990.org logto-smtp
+#     ./provision-ses.sh example.com logto-smtp
 #
 # Produces (to stdout, for pasting into Logto's SMTP connector config):
 #   DKIM CNAME records to add to your DNS
@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-DOMAIN="${1:-swapp1990.org}"
+DOMAIN="${1:?domain required, e.g. ./provision-ses.sh example.com}"
 IAM_USER="${2:-logto-smtp}"
 REGION="${AWS_DEFAULT_REGION:-us-west-2}"
 
@@ -70,6 +70,6 @@ From:     no-reply@$DOMAIN  (only works after DKIM verification)
 2. SES is currently in sandbox — only sends to verified recipients.
    For real users you'll need to request production access:
      https://console.aws.amazon.com/ses/home?region=$REGION#/account
-3. While sandboxed, verify swapp19902@gmail.com or equivalent recipient(s):
+3. While sandboxed, verify each recipient address you intend to send to:
      aws sesv2 create-email-identity --email-identity you@example.com
 EOF

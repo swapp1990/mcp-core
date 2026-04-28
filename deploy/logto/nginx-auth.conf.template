@@ -1,24 +1,28 @@
-# /etc/nginx/sites-available/auth.swapp1990.org
-#
 # Host nginx vhost that fronts the self-hosted Logto container.
+#
+# Render this template by substituting __DOMAIN__ with your auth host
+# (e.g. auth.example.com), then drop into /etc/nginx/sites-available/.
+# One-liner:
+#     sed 's/__DOMAIN__/auth.example.com/g' nginx-auth.conf.template \
+#       | sudo tee /etc/nginx/sites-available/auth.example.com >/dev/null
 #
 # Port routing:
 #   443   (user-facing: OIDC, sign-in experience, APIs) -> 127.0.0.1:3011
 #   8443  (admin console + admin-tenant OIDC)           -> 127.0.0.1:3012
 #
-# Both listeners share the single auth.swapp1990.org cert. The admin
-# console lives on a non-default port (not a subpath) so its SPA's
-# hardcoded /api/* fetches resolve to the correct tenant — Logto OSS
-# does not support serving the admin SPA from a subpath.
+# Both listeners share the single __DOMAIN__ cert. The admin console
+# lives on a non-default port (not a subpath) so its SPA's hardcoded
+# /api/* fetches resolve to the correct tenant — Logto OSS does not
+# support serving the admin SPA from a subpath.
 #
-# For first-time deploy, run:
-#     certbot --nginx -d auth.swapp1990.org
-# then add the port-8443 server block below + open firewall:
-#     ufw allow 8443/tcp
+# For first-time deploy:
+#     sudo certbot --nginx -d __DOMAIN__
+# then add the port-8443 server block below + open the firewall:
+#     sudo ufw allow 8443/tcp
 
 # ── user-facing (port 443) ────────────────────────────────────────────
 server {
-    server_name auth.swapp1990.org;
+    server_name __DOMAIN__;
 
     client_max_body_size 10m;
 
@@ -32,8 +36,8 @@ server {
     }
 
     listen 443 ssl;
-    ssl_certificate /etc/letsencrypt/live/auth.swapp1990.org/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/auth.swapp1990.org/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/__DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 }
@@ -41,10 +45,10 @@ server {
 # ── admin (port 8443) ─────────────────────────────────────────────────
 server {
     listen 8443 ssl;
-    server_name auth.swapp1990.org;
+    server_name __DOMAIN__;
 
-    ssl_certificate /etc/letsencrypt/live/auth.swapp1990.org/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/auth.swapp1990.org/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/__DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
@@ -63,11 +67,11 @@ server {
 
 # ── HTTP -> HTTPS redirect ────────────────────────────────────────────
 server {
-    if ($host = auth.swapp1990.org) {
+    if ($host = __DOMAIN__) {
         return 301 https://$host$request_uri;
     }
 
     listen 80;
-    server_name auth.swapp1990.org;
+    server_name __DOMAIN__;
     return 404;
 }

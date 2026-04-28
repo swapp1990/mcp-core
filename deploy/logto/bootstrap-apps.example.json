@@ -1,0 +1,21 @@
+{
+  "_comment": "Example product config for bootstrap-apps.py. Copy to bootstrap-apps.json (gitignored) and edit. One entry per product (frontend + API + optional MCP-DCR M2M app).",
+  "products": [
+    {
+      "name": "myapp",
+      "spa_app_name": "MyApp (frontend)",
+      "redirect_uris": [
+        "http://localhost:5173/callback",
+        "https://app.example.com/callback"
+      ],
+      "post_logout_uris": [
+        "http://localhost:5173",
+        "https://app.example.com"
+      ],
+      "api_resource": "https://app.example.com",
+      "api_resource_name": "MyApp API",
+      "scopes": ["myapp:read", "myapp:write"],
+      "mcp_dcr_app_name": "MyApp MCP-DCR"
+    }
+  ]
+}
