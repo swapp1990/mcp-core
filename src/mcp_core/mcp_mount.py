@@ -43,6 +43,7 @@ import logging
 from typing import Any, Dict, Iterable, Optional
 
 from fastapi import FastAPI
+from starlette.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,48 @@ def _patch_fastmcp_get_http_headers() -> bool:
     return True
 
 
+def _install_bearer_gate(app: FastAPI, mount_path_v2: str) -> None:
+    """Register HTTP middleware that 401s unauthenticated requests to
+    ``mount_path_v2`` with ``WWW-Authenticate: Bearer resource_metadata=...``.
+
+    Claude Code (and any RFC 6750-compliant MCP client) treats the
+    resource_metadata URL as the OAuth discovery pointer and triggers
+    DCR + browser auth automatically. Without this header, the client
+    sees only an HTTP 200 SSE stream containing a JSON-RPC error and
+    cannot self-recover the auth state — the symptom users observe as
+    "MCP server connected but unauthenticated".
+
+    Scoped strictly to ``mount_path_v2``; SSE legacy at /mcp is left
+    untouched so anonymous read-only callers using the legacy transport
+    keep working.
+    """
+    prefix = mount_path_v2.rstrip("/")
+
+    @app.middleware("http")
+    async def _require_bearer_for_v2(request, call_next):
+        path = request.url.path
+        if path == prefix or path.startswith(prefix + "/"):
+            auth = request.headers.get("authorization", "")
+            if not auth.lower().startswith("bearer "):
+                base = str(request.base_url).rstrip("/")
+                resource_metadata_url = f"{base}/.well-known/oauth-protected-resource"
+                www_authenticate = (
+                    f'Bearer resource_metadata="{resource_metadata_url}"'
+                )
+                return JSONResponse(
+                    {
+                        "error": "unauthorized",
+                        "error_description": (
+                            "Authentication required. Discover OAuth metadata "
+                            "via the WWW-Authenticate header."
+                        ),
+                    },
+                    status_code=401,
+                    headers={"WWW-Authenticate": www_authenticate},
+                )
+        return await call_next(request)
+
+
 def mount_mcp(
     app: FastAPI,
     *,
@@ -90,6 +133,7 @@ def mount_mcp(
     mount_path_legacy: str = "/mcp",
     mount_path_v2: str = "/mcp/v2",
     instructions: str = "",
+    require_auth: bool = True,
 ) -> Dict[str, Any]:
     """Mount fastapi-mcp SSE + FastMCP v3 stateless HTTP on `app`.
 
@@ -97,11 +141,22 @@ def mount_mcp(
     legacy mount. The v2 mount relies on the downstream FastAPI route's
     own auth (via `core.auth_and_bill`), so no auth_config is needed there.
 
-    Returns: {"sse": bool, "v2": bool, "v2_path": str|None, "sse_path": str|None}
+    When ``require_auth=True`` (the default), an HTTP middleware is
+    installed that 401s any request to ``mount_path_v2`` without a
+    Bearer token, attaching a ``WWW-Authenticate`` header that points
+    at ``/.well-known/oauth-protected-resource``. This is what
+    surface-level OAuth auto-discovery (Claude Code, modern MCP
+    clients) needs to trigger DCR + browser auth.
+
+    Returns: {"sse": bool, "v2": bool, "v2_path": str|None, "sse_path": str|None,
+              "auth_gate": bool}
     """
     tag_set = set(tags or ())
     auth_config = core.mcp_auth_config() if hasattr(core, "mcp_auth_config") else None
-    result: Dict[str, Any] = {"sse": False, "v2": False, "sse_path": None, "v2_path": None}
+    result: Dict[str, Any] = {
+        "sse": False, "v2": False, "sse_path": None, "v2_path": None,
+        "auth_gate": False,
+    }
 
     # ── Legacy SSE via fastapi-mcp ──────────────────────────────────────
     if legacy_sse:
@@ -160,6 +215,18 @@ def mount_mcp(
         # workers, etc.) running too.
         original_lifespan = app.router.lifespan_context
         app.router.lifespan_context = combine_lifespans(original_lifespan, v2_app.lifespan)
+
+        # Install the bearer gate BEFORE mounting so it fires ahead of
+        # FastMCP's tool runner — FastMCP swallows downstream 401s into
+        # JSON-RPC error results, which are useless for OAuth discovery.
+        if require_auth:
+            _install_bearer_gate(app, mount_path_v2)
+            result["auth_gate"] = True
+            logger.info(
+                "[mcp-core] Bearer gate installed at %s (401+WWW-Authenticate)",
+                mount_path_v2,
+            )
+
         app.mount(mount_path_v2, v2_app)
         result["v2"] = True
         result["v2_path"] = mount_path_v2

@@ -40,7 +40,7 @@ __all__ = [
     "MCPCore", "LogtoAuth", "StripeBilling", "HealthCheck", "ToolLogger",
     "LogtoDCR", "mount_mcp",
 ]
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +270,7 @@ class MCPCore:
         mount_path_legacy: str = "/mcp",
         mount_path_v2: str = "/mcp/v2",
         instructions: str = "",
+        require_auth: bool = True,
     ) -> Dict[str, Any]:
         """Mount MCP transports (legacy SSE + stateless HTTP).
 
@@ -286,6 +287,7 @@ class MCPCore:
             mount_path_legacy=mount_path_legacy,
             mount_path_v2=mount_path_v2,
             instructions=instructions,
+            require_auth=require_auth,
         )
 
     def mcp_auth_config(self) -> Any:

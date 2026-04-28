@@ -107,6 +107,107 @@ def test_get_http_headers_patch_is_idempotent(core: MCPCore):
     assert patched_once is patched_twice
 
 
+def test_bearer_gate_returns_401_with_www_authenticate(core: MCPCore, app_with_tagged_routes):
+    """Unauthenticated POST to /mcp/v2 must return real HTTP 401 with a
+    WWW-Authenticate header pointing at the resource_metadata URL —
+    that's what triggers Claude Code's OAuth auto-discovery."""
+    from fastapi.testclient import TestClient
+
+    core.mount_mcp(app_with_tagged_routes, name="t", tags={"mcp"})
+
+    client = TestClient(app_with_tagged_routes)
+    r = client.post(
+        "/mcp/v2/",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        headers={"Accept": "application/json, text/event-stream"},
+    )
+    assert r.status_code == 401, f"expected 401, got {r.status_code}: {r.text}"
+    www_auth = r.headers.get("WWW-Authenticate", "")
+    assert www_auth.startswith("Bearer "), f"missing/invalid WWW-Authenticate: {www_auth!r}"
+    assert "resource_metadata=" in www_auth
+    assert "/.well-known/oauth-protected-resource" in www_auth
+
+
+def test_bearer_gate_passes_through_with_token(core: MCPCore, app_with_tagged_routes):
+    """A request carrying a Bearer token must NOT be 401'd by the gate
+    (the downstream FastMCP/route still does its own validation).
+
+    raise_server_exceptions=False because TestClient doesn't run the
+    composed lifespan that FastMCP's session manager needs — but for
+    this test we only care that the gate let the request *past*; the
+    downstream crash is unrelated to gate behavior.
+    """
+    from fastapi.testclient import TestClient
+
+    core.mount_mcp(app_with_tagged_routes, name="t", tags={"mcp"})
+
+    client = TestClient(app_with_tagged_routes, raise_server_exceptions=False)
+    r = client.post(
+        "/mcp/v2/",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        headers={
+            "Authorization": "Bearer fake-but-shaped-correctly",
+            "Accept": "application/json, text/event-stream",
+        },
+    )
+    # The gate does not validate the token — it only checks for presence.
+    # Crucial assertion: our gate's WWW-Authenticate (which carries
+    # resource_metadata=) must NOT be on this response — that header is
+    # the gate's signature and only fires on the unauth path.
+    assert "resource_metadata" not in r.headers.get("WWW-Authenticate", "")
+
+
+def test_bearer_gate_only_scopes_to_v2_path(core: MCPCore, app_with_tagged_routes):
+    """The gate is path-scoped to /mcp/v2 — paths that share a prefix but
+    are NOT under /mcp/v2 (like /mcp legacy SSE, or /mcp/v2-foo) must
+    not be 401'd. Unit-tests the prefix logic directly so we don't have
+    to open a real SSE stream (TestClient blocks on streaming GETs)."""
+    from fastapi.testclient import TestClient
+
+    core.mount_mcp(
+        app_with_tagged_routes,
+        name="t",
+        tags={"mcp"},
+        legacy_sse=False,  # don't mount /mcp so GET can't stream
+    )
+
+    client = TestClient(app_with_tagged_routes, raise_server_exceptions=False)
+
+    # /mcp (no /v2) must NOT be 401'd by the gate
+    r = client.get("/mcp")
+    assert "resource_metadata" not in r.headers.get("WWW-Authenticate", "")
+
+    # /mcp/v2-foo (prefix collision but different path) must NOT be 401'd
+    r = client.get("/mcp/v2-foo")
+    assert "resource_metadata" not in r.headers.get("WWW-Authenticate", "")
+
+    # /mcp/v2 (exact prefix match) MUST be 401'd
+    r = client.post("/mcp/v2", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert r.status_code == 401
+    assert "resource_metadata" in r.headers.get("WWW-Authenticate", "")
+
+
+def test_require_auth_false_disables_gate(core: MCPCore, app_with_tagged_routes):
+    """When require_auth=False, no middleware is installed and unauth
+    requests reach FastMCP normally."""
+    from fastapi.testclient import TestClient
+
+    result = core.mount_mcp(
+        app_with_tagged_routes, name="t", tags={"mcp"}, require_auth=False,
+    )
+    assert result["auth_gate"] is False
+
+    client = TestClient(app_with_tagged_routes, raise_server_exceptions=False)
+    r = client.post(
+        "/mcp/v2/",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        headers={"Accept": "application/json, text/event-stream"},
+    )
+    # FastMCP handles it (200 or its own error shape) — must NOT be our 401.
+    if r.status_code == 401:
+        assert "resource_metadata" not in r.headers.get("WWW-Authenticate", "")
+
+
 def test_get_http_headers_patch_includes_authorization(core: MCPCore):
     """The patched get_http_headers always includes 'authorization' in
     its include set, so the downstream FastAPI route sees the Bearer
