@@ -31,6 +31,7 @@ from fastapi import FastAPI, Request
 from .auth import LogtoAuth
 from .billing import StripeBilling
 from .dcr import LogtoDCR
+from .echo import with_echo
 from .health import HealthCheck
 from .mcp_mount import mount_mcp
 from .routes import install_routes
@@ -38,7 +39,7 @@ from .tool_logging import ToolLogger
 
 __all__ = [
     "MCPCore", "LogtoAuth", "StripeBilling", "HealthCheck", "ToolLogger",
-    "LogtoDCR", "mount_mcp",
+    "LogtoDCR", "mount_mcp", "with_echo",
 ]
 try:
     from importlib.metadata import version as _pkg_version
@@ -275,6 +276,7 @@ class MCPCore:
         mount_path_v2: str = "/mcp/v2",
         instructions: str = "",
         require_auth: bool = True,
+        tool_titles: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Mount MCP transports (legacy SSE + stateless HTTP).
 
@@ -292,6 +294,7 @@ class MCPCore:
             mount_path_v2=mount_path_v2,
             instructions=instructions,
             require_auth=require_auth,
+            tool_titles=tool_titles,
         )
 
     def mcp_auth_config(self) -> Any:

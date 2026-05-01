@@ -39,8 +39,9 @@ without raising.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional, Union
 
 from fastapi import FastAPI
 from starlette.responses import JSONResponse
@@ -122,6 +123,63 @@ def _install_bearer_gate(app: FastAPI, mount_path_v2: str) -> None:
         return await call_next(request)
 
 
+def _apply_tool_titles(
+    fastmcp_server: Any,
+    tool_titles: Mapping[str, Union[str, Mapping[str, Any]]],
+) -> int:
+    """Set human-readable title + annotations on FastMCP tools.
+
+    `tool_titles` keys are FastAPI operation_ids (== FastMCP tool names
+    after `from_fastapi`). Values are either a plain string (becomes
+    `annotations.title`) or a dict matching the MCP `ToolAnnotations`
+    schema (`title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`,
+    `openWorldHint`).
+
+    Mutates the tool objects in place. `_list_tools` returns the same
+    instances on subsequent calls, so this persists across listings.
+    Unknown operation_ids are logged at debug and skipped — typos
+    shouldn't crash startup.
+
+    Returns the number of tools that were updated.
+    """
+    try:
+        from fastmcp.tools.tool import ToolAnnotations
+    except ImportError:
+        return 0
+
+    try:
+        tools = asyncio.run(fastmcp_server._list_tools())
+    except RuntimeError:
+        # Already inside a running loop (unlikely at module load, but
+        # be defensive). Schedule and wait via a fresh loop.
+        loop = asyncio.new_event_loop()
+        try:
+            tools = loop.run_until_complete(fastmcp_server._list_tools())
+        finally:
+            loop.close()
+
+    by_name = {t.name: t for t in tools}
+    updated = 0
+    for op_id, spec in tool_titles.items():
+        tool = by_name.get(op_id)
+        if tool is None:
+            logger.debug("[mcp-core] tool_titles: no tool named %r", op_id)
+            continue
+        if isinstance(spec, str):
+            ann_kwargs: Dict[str, Any] = {"title": spec}
+        else:
+            ann_kwargs = dict(spec)
+        title = ann_kwargs.get("title")
+        if title:
+            tool.title = title
+        # Preserve any pre-existing annotations fields the caller didn't override.
+        existing = tool.annotations.model_dump(exclude_none=True) if tool.annotations else {}
+        existing.update({k: v for k, v in ann_kwargs.items() if v is not None})
+        tool.annotations = ToolAnnotations(**existing)
+        updated += 1
+    return updated
+
+
 def mount_mcp(
     app: FastAPI,
     *,
@@ -134,6 +192,7 @@ def mount_mcp(
     mount_path_v2: str = "/mcp/v2",
     instructions: str = "",
     require_auth: bool = True,
+    tool_titles: Optional[Mapping[str, Union[str, Mapping[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     """Mount fastapi-mcp SSE + FastMCP v3 stateless HTTP on `app`.
 
@@ -208,6 +267,14 @@ def mount_mcp(
             v2_kwargs["instructions"] = instructions
 
         v2 = FastMCP.from_fastapi(app, **v2_kwargs)
+
+        if tool_titles:
+            try:
+                n = _apply_tool_titles(v2, tool_titles)
+                logger.info("[mcp-core] applied friendly titles to %d tool(s)", n)
+            except Exception as e:  # pragma: no cover
+                logger.warning("[mcp-core] tool_titles application failed: %s", e)
+
         v2_app = v2.http_app(path="/", stateless_http=True)
 
         # Compose lifespans: FastMCP's session manager needs its lifespan
