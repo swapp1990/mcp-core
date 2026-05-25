@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from fastapi import FastAPI, Request
 
-from .auth import LogtoAuth
+from .auth import LogtoAuth, SupabaseAuth, user_identity
 from .billing import StripeBilling
 from .dcr import LogtoDCR
 from .echo import with_echo
@@ -38,8 +38,8 @@ from .routes import install_routes
 from .tool_logging import ToolLogger
 
 __all__ = [
-    "MCPCore", "LogtoAuth", "StripeBilling", "HealthCheck", "ToolLogger",
-    "LogtoDCR", "mount_mcp", "with_echo",
+    "MCPCore", "LogtoAuth", "SupabaseAuth", "StripeBilling", "HealthCheck",
+    "ToolLogger", "LogtoDCR", "mount_mcp", "with_echo", "user_identity",
 ]
 try:
     from importlib.metadata import version as _pkg_version
@@ -61,9 +61,15 @@ class MCPCore:
     def __init__(
         self,
         product_name: str = "",
+        auth_provider: str = "",
         # Logto auth
         logto_endpoint: str = "",
         logto_api_resource: str = "",
+        # Supabase auth
+        supabase_url: str = "",
+        supabase_anon_key: str = "",
+        supabase_auth_base_url: str = "",
+        supabase_api_resource: str = "",
         free_credits: int = 0,
         dev_auth_bypass: bool = False,
         dev_user_id: str = "local-dev-user",
@@ -84,6 +90,8 @@ class MCPCore:
         # MCP OAuth
         mcp_logto_app_id: str = "",
         mcp_logto_app_secret: str = "",
+        mcp_supabase_client_id: str = "",
+        mcp_supabase_client_secret: str = "",
         oauth_scopes: Optional[List[str]] = None,
         # Logto Management API (enables real RFC 7591 DCR when provided)
         logto_mgmt_app_id: str = "",
@@ -110,16 +118,58 @@ class MCPCore:
         _read_only = read_only_tools or set()
         _free = free_credits or int(_env("FREE_CREDITS", "30"))
 
-        # Auth
-        self.auth = LogtoAuth(
-            endpoint=logto_endpoint or _env("LOGTO_ENDPOINT"),
-            api_resource=logto_api_resource or _env("LOGTO_API_RESOURCE"),
-            free_credits=_free,
-            dev_bypass=dev_auth_bypass or _env("DEV_AUTH_BYPASS") == "1",
-            dev_user_id=dev_user_id,
-            read_only_tools=_read_only,
-            reject_m2m=reject_m2m,
+        _logto_endpoint = logto_endpoint or _env("LOGTO_ENDPOINT")
+        _logto_api_resource = logto_api_resource or _env("LOGTO_API_RESOURCE")
+        _supabase_url = supabase_url or _env("SUPABASE_URL")
+        _supabase_anon_key = supabase_anon_key or _env("SUPABASE_ANON_KEY")
+        _supabase_auth_base_url = (
+            supabase_auth_base_url or _env("SUPABASE_AUTH_BASE_URL")
         )
+        _supabase_api_resource = (
+            supabase_api_resource
+            or _env("SUPABASE_API_RESOURCE")
+            or _logto_api_resource
+        )
+        _auth_provider = (
+            auth_provider or _env("AUTH_PROVIDER")
+        ).strip().lower()
+        if not _auth_provider:
+            if _supabase_url and _supabase_anon_key:
+                _auth_provider = "supabase"
+            elif _logto_endpoint:
+                _auth_provider = "logto"
+            else:
+                _auth_provider = "logto"
+        if _auth_provider not in {"logto", "supabase", "none"}:
+            raise ValueError(
+                "auth_provider must be one of: logto, supabase, none"
+            )
+        self.auth_provider = _auth_provider
+
+        # Auth
+        _dev_bypass = dev_auth_bypass or _env("DEV_AUTH_BYPASS") == "1"
+        if _auth_provider == "supabase":
+            self.auth = SupabaseAuth(
+                supabase_url=_supabase_url,
+                anon_key=_supabase_anon_key,
+                auth_base_url=_supabase_auth_base_url,
+                api_resource=_supabase_api_resource,
+                free_credits=_free,
+                dev_bypass=_dev_bypass,
+                dev_user_id=dev_user_id,
+                read_only_tools=_read_only,
+                reject_m2m=reject_m2m,
+            )
+        else:
+            self.auth = LogtoAuth(
+                endpoint=_logto_endpoint,
+                api_resource=_logto_api_resource,
+                free_credits=_free,
+                dev_bypass=_dev_bypass,
+                dev_user_id=dev_user_id,
+                read_only_tools=_read_only,
+                reject_m2m=reject_m2m,
+            )
 
         # Billing
         self.billing = StripeBilling(
@@ -148,8 +198,20 @@ class MCPCore:
         self.health = HealthCheck(product_name=self.product_name)
 
         # MCP OAuth config
-        self._mcp_app_id = mcp_logto_app_id or _env("MCP_LOGTO_APP_ID")
-        self._mcp_app_secret = mcp_logto_app_secret or _env("MCP_LOGTO_APP_SECRET")
+        if _auth_provider == "supabase":
+            self._mcp_app_id = (
+                mcp_supabase_client_id
+                or _env("MCP_SUPABASE_CLIENT_ID")
+            )
+            self._mcp_app_secret = (
+                mcp_supabase_client_secret
+                or _env("MCP_SUPABASE_CLIENT_SECRET")
+            )
+        else:
+            self._mcp_app_id = mcp_logto_app_id or _env("MCP_LOGTO_APP_ID")
+            self._mcp_app_secret = (
+                mcp_logto_app_secret or _env("MCP_LOGTO_APP_SECRET")
+            )
         self._webhook_secret = stripe_webhook_secret or _env("STRIPE_WEBHOOK_SECRET")
         self._oauth_scopes = oauth_scopes
         self._branded_sign_in_url = (
@@ -163,7 +225,12 @@ class MCPCore:
         _mgmt_id = logto_mgmt_app_id or _env("LOGTO_MGMT_APP_ID")
         _mgmt_secret = logto_mgmt_app_secret or _env("LOGTO_MGMT_APP_SECRET")
         self.dcr: Optional[LogtoDCR] = None
-        if _mgmt_id and _mgmt_secret and self.auth.endpoint:
+        if (
+            _auth_provider == "logto"
+            and _mgmt_id
+            and _mgmt_secret
+            and getattr(self.auth, "endpoint", "")
+        ):
             self.dcr = LogtoDCR(
                 logto_endpoint=self.auth.endpoint,
                 mgmt_app_id=_mgmt_id,
@@ -221,6 +288,7 @@ class MCPCore:
         if user is None:
             # Read-only tool, no auth provided
             return {
+                "auth_user_id": "anonymous",
                 "logto_user_id": "anonymous",
                 "free_credits": 0,
                 "credits_used": 0,
@@ -245,7 +313,7 @@ class MCPCore:
         meta: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Log a tool call to the audit trail."""
-        user_id = (user or {}).get("logto_user_id", "")
+        user_id = user_identity(user)
         cost = self.billing.get_tool_cost(tool)
         await self.tool_logger.log(
             request=request,
@@ -302,12 +370,29 @@ class MCPCore:
 
         Requires fastapi-mcp to be installed (it's a peer dependency).
         """
-        if not self.auth.endpoint or not self._mcp_app_id:
+        if not self._mcp_app_id:
             return None
         try:
             from fastapi_mcp.types import AuthConfig
         except ImportError:
             from fastapi_mcp import AuthConfig
+        if getattr(self.auth, "provider_name", "") == "supabase":
+            return AuthConfig(
+                issuer=self.auth.auth_base_url,
+                oauth_metadata_url=self.auth.oauth_metadata_url,
+                authorize_url=self.auth.authorize_url,
+                client_id=self._mcp_app_id,
+                client_secret=self._mcp_app_secret,
+                audience=self.auth.api_resource,
+                default_scope=" ".join(
+                    self._oauth_scopes
+                    or ["openid", "profile", "email"]
+                ),
+                setup_proxies=True,
+                setup_fake_dynamic_registration=True,
+            )
+        if not getattr(self.auth, "endpoint", ""):
+            return None
         return AuthConfig(
             issuer=f"{self.auth.endpoint}/oidc",
             oauth_metadata_url=(

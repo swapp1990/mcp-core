@@ -141,5 +141,5 @@ async def test_dev_bypass_full_flow(client, dev_headers, core):
     assert user["credits_used"] >= 3
 
     # Check log was written
-    log = await core.db["tool_logs"].find_one({"user_id": "local-dev-user"})
+    log = await core.db["tool_logs"].find_one({"user_id": "logto:local-dev-user"})
     assert log is not None

@@ -164,6 +164,9 @@ async def test_get_or_create_user_first_time(auth, mock_db):
     payload = {"sub": "new_user_1", "email": "new@test.com"}
     user = await auth.get_or_create_user(mock_db, payload)
     assert user["logto_user_id"] == "new_user_1"
+    assert user["auth_provider"] == "logto"
+    assert user["auth_subject"] == "new_user_1"
+    assert user["auth_user_id"] == "logto:new_user_1"
     assert user["email"] == "new@test.com"
     assert user["free_credits"] == 10
     assert user["credits_used"] == 0

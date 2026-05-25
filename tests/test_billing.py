@@ -26,6 +26,24 @@ def _make_user(
     }
 
 
+def _make_supabase_user(
+    user_id: str = "supabase:user_1",
+    free_credits: int = 10,
+    credits_used: int = 0,
+    stripe_customer_id: str = None,
+    stripe_subscription_id: str = None,
+):
+    return {
+        "auth_provider": "supabase",
+        "auth_subject": user_id.split(":", 1)[-1],
+        "auth_user_id": user_id,
+        "free_credits": free_credits,
+        "credits_used": credits_used,
+        "stripe_customer_id": stripe_customer_id,
+        "stripe_subscription_id": stripe_subscription_id,
+    }
+
+
 # ── Credit deduction ─────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -51,6 +69,23 @@ async def test_paid_tool_deducts_free_credits(billing, mock_db, mock_stripe):
 
     # Verify DB was updated
     db_user = await mock_db["users"].find_one({"logto_user_id": "user_1"})
+    assert db_user["credits_used"] == 3
+
+
+@pytest.mark.asyncio
+async def test_paid_tool_deducts_free_credits_by_auth_user_id(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+
+    user = _make_supabase_user(free_credits=10, credits_used=0)
+    await mock_db["users"].insert_one(user.copy())
+
+    result = await billing.check_and_deduct(mock_db, user, "paid_tool")
+    assert result["cost"] == 3
+    assert result["source"] == "free_credits"
+    assert result["remaining_credits"] == 7
+
+    db_user = await mock_db["users"].find_one({"auth_user_id": "supabase:user_1"})
     assert db_user["credits_used"] == 3
 
 

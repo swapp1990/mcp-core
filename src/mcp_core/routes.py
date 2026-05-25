@@ -95,7 +95,11 @@ def install_routes(app: FastAPI, core: Any) -> None:
     # tokens that mcp-core's verify_token can't decode. We proxy both
     # endpoints and inject `resource`, then override the metadata doc so
     # clients hit our proxies instead of Logto direct.
-    if core.auth.endpoint and core.auth.api_resource:
+    if (
+        getattr(core.auth, "provider_name", "logto") == "logto"
+        and getattr(core.auth, "endpoint", "")
+        and core.auth.api_resource
+    ):
         from urllib.parse import urlencode
 
         import httpx

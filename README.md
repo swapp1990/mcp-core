@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-Auth, billing, and logging infrastructure for MCP-first servers. Sits between your product code and [fastapi-mcp](https://github.com/tadata-org/fastapi-mcp).
+Auth, billing, and logging infrastructure for MCP-first servers. Sits between your product code and [fastapi-mcp](https://github.com/tadata-org/fastapi-mcp), with provider-aware auth for Logto and Supabase.
 
 ```
 Your MCP Server  (product-specific tool handlers)
@@ -34,6 +34,7 @@ from mcp_core import MCPCore
 
 core = MCPCore(
     product_name="my-product",
+    auth_provider="logto",
     logto_endpoint="https://your-tenant.logto.app",
     logto_api_resource="https://api.my-product.app",
     mongodb_uri="mongodb+srv://...",
@@ -62,13 +63,38 @@ async def generate(request: Request):
 
 All config can also come from `MCP_CORE_*` environment variables.
 
+To use Supabase Auth instead, switch the provider and pass your Supabase URL
+and anon key:
+
+```python
+core = MCPCore(
+    product_name="my-product",
+    auth_provider="supabase",
+    supabase_url="https://your-project.supabase.co",
+    supabase_anon_key="sb_publishable_...",
+    supabase_api_resource="https://api.my-product.app",
+    mongodb_uri="mongodb+srv://...",
+    free_credits=30,
+    tool_costs={"browse": 0, "generate": 5},
+    read_only_tools={"browse"},
+)
+```
+
+If `auth_provider` is omitted, mcp-core infers Supabase when both
+`MCP_CORE_SUPABASE_URL` and `MCP_CORE_SUPABASE_ANON_KEY` are present;
+otherwise it preserves the existing Logto default.
+
 ## Modules
 
-### Auth (`mcp_core.auth.LogtoAuth`)
+### Auth (`mcp_core.auth`)
 
-Logto JWT validation via JWKS. Creates MongoDB user records on first auth.
+Provider-aware bearer-token auth. Creates MongoDB user records on first auth
+using a neutral `auth_user_id` while preserving legacy `logto_user_id` fields
+for existing Logto apps.
 
-- RS256/ES256/ES384/ES512 support
+- Logto JWT validation via JWKS
+- Supabase access-token validation through Supabase Auth
+- Cloud or self-hosted provider URLs
 - 30s clock skew tolerance
 - Race-condition-safe user upsert
 - Dev bypass (`Bearer dev-bypass`) for local development
@@ -106,7 +132,7 @@ RUN_LIVE_TESTS=1 pytest tests/live/ -v
 
 Bug reports and PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
-Auth provider abstraction (Auth0, Keycloak, generic OIDC) is tracked in [#1](https://github.com/swapp1990/mcp-core/issues/1) — discussion-first.
+The multi-provider auth design reference lives in [docs/multi-provider-auth-plan.md](docs/multi-provider-auth-plan.md).
 
 ## License
 

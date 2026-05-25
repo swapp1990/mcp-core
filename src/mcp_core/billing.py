@@ -12,6 +12,8 @@ from typing import Any, Dict, Optional, Set
 
 from fastapi import HTTPException, Request
 
+from .auth import user_identity, user_lookup_filter
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["StripeBilling"]
@@ -94,7 +96,7 @@ class StripeBilling:
         if cost == 0 or tool_name in self.read_only_tools:
             return {"cost": 0, "source": "free", "remaining_credits": None}
 
-        user_id = user.get("logto_user_id", "")
+        user_id = user_identity(user)
         free_credits = user.get("free_credits", 0)
         credits_used = user.get("credits_used", 0)
         remaining = free_credits - credits_used
@@ -105,7 +107,7 @@ class StripeBilling:
         if remaining >= cost:
             if db is not None:
                 await db["users"].update_one(
-                    {"logto_user_id": user_id},
+                    user_lookup_filter(user),
                     {"$inc": {"credits_used": cost}},
                 )
             logger.info(
@@ -149,7 +151,9 @@ class StripeBilling:
                 request.headers.get("origin")
                 or str(request.base_url).rstrip("/")
             )
-        setup_url = self._get_checkout_url(user_id, stripe_customer_id, origin)
+        setup_url = self._get_checkout_url(
+            user_id, stripe_customer_id, origin, user=user
+        )
         raise HTTPException(
             status_code=402,
             detail={
@@ -169,6 +173,7 @@ class StripeBilling:
         user_id: str,
         stripe_customer_id: Optional[str] = None,
         origin: Optional[str] = None,
+        user: Optional[Dict[str, Any]] = None,
     ) -> str:
         stripe = self._get_stripe()
         base = origin or self.success_url.rsplit("/", 1)[0] if self.success_url else ""
@@ -179,12 +184,19 @@ class StripeBilling:
             return f"{base}/billing/success"
 
         try:
+            metadata = {
+                "auth_user_id": user_id,
+                "auth_provider": (user or {}).get("auth_provider", ""),
+                "auth_subject": (user or {}).get("auth_subject", ""),
+            }
+            if (user or {}).get("logto_user_id"):
+                metadata["logto_user_id"] = (user or {}).get("logto_user_id", "")
             params: Dict[str, Any] = {
                 "mode": "subscription",
                 "line_items": [{"price": self.price_id}],
                 "success_url": f"{base}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
                 "cancel_url": self.cancel_url or f"{base}/",
-                "metadata": {"logto_user_id": user_id},
+                "metadata": metadata,
             }
             if stripe_customer_id:
                 params["customer"] = stripe_customer_id
@@ -237,12 +249,19 @@ class StripeBilling:
         data = event["data"]["object"]
 
         if event_type == "checkout.session.completed":
-            logto_user_id = data.get("metadata", {}).get("logto_user_id", "")
+            metadata = data.get("metadata", {}) or {}
+            auth_user_id = metadata.get("auth_user_id", "")
+            logto_user_id = metadata.get("logto_user_id", "")
             customer_id = data.get("customer", "")
             subscription_id = data.get("subscription", "")
-            if logto_user_id and db is not None:
+            if (auth_user_id or logto_user_id) and db is not None:
+                query = (
+                    {"auth_user_id": auth_user_id}
+                    if auth_user_id
+                    else {"logto_user_id": logto_user_id}
+                )
                 await db["users"].update_one(
-                    {"logto_user_id": logto_user_id},
+                    query,
                     {
                         "$set": {
                             "stripe_customer_id": customer_id,
@@ -252,7 +271,7 @@ class StripeBilling:
                 )
                 logger.info(
                     "[billing] Linked Stripe customer %s to user %s",
-                    customer_id, logto_user_id,
+                    customer_id, auth_user_id or logto_user_id,
                 )
             return {"status": "ok", "event": event_type}
 

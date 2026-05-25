@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-core-auth"
-version = "0.2.2"
+version = "0.3.0"
 description = "Auth, billing, and logging infrastructure for MCP-first servers."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "swapp1990" }]
-keywords = ["mcp", "fastapi", "logto", "stripe", "billing", "auth"]
+keywords = ["mcp", "fastapi", "logto", "supabase", "stripe", "billing", "auth"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Framework :: FastAPI",
@@ -48,6 +48,7 @@ packages = ["src/mcp_core"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = ["-p", "no:flask"]
 testpaths = ["tests"]
 markers = [
     "live: requires real Logto/MongoDB/Stripe (RUN_LIVE_TESTS=1)",
