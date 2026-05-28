@@ -125,6 +125,15 @@ def billing():
         tool_costs={"free_tool": 0, "paid_tool": 3, "expensive_tool": 8},
         read_only_tools={"free_tool"},
         success_url="https://test.app/billing/success",
+        buy_url="https://test.app/billing",
+        credit_packs=[
+            {
+                "id": "pack_50",
+                "credits": 50,
+                "price_cents": 500,
+                "price_id": "price_pack_50",
+            }
+        ],
     )
 
 
@@ -136,6 +145,7 @@ def mock_stripe():
     calls = []
 
     class FakeSession:
+        id = "cs_fake_123"
         url = "https://checkout.stripe.com/fake_session_123"
 
         @classmethod
@@ -151,8 +161,70 @@ def mock_stripe():
         def create(cls, **kwargs):
             calls.append(("billing.MeterEvent.create", kwargs))
 
+    class FakeMeterEventAdjustment:
+        @classmethod
+        def create(cls, **kwargs):
+            calls.append(("billing.MeterEventAdjustment.create", kwargs))
+
     class FakeBilling:
         MeterEvent = FakeMeterEvent
+
+        class MeterEventAdjustment(FakeMeterEventAdjustment):
+            pass
+
+    class FakePortalSession:
+        url = "https://billing.stripe.com/session_123"
+
+        @classmethod
+        def create(cls, **kwargs):
+            calls.append(("billing_portal.Session.create", kwargs))
+            return cls()
+
+    class FakeBillingPortal:
+        Session = FakePortalSession
+
+    class FakeCustomerObject:
+        id = "cus_new"
+
+    class FakeCustomer:
+        @classmethod
+        def retrieve(cls, customer_id):
+            calls.append(("Customer.retrieve", {"customer": customer_id}))
+            if customer_id == "missing":
+                exc = Exception("No such customer")
+                exc.code = "resource_missing"
+                raise exc
+            return cls()
+
+        @classmethod
+        def create(cls, **kwargs):
+            calls.append(("Customer.create", kwargs))
+            return FakeCustomerObject()
+
+    class FakePaymentMethodList:
+        data = [{"id": "pm_card_123"}]
+
+    class FakePaymentMethod:
+        @classmethod
+        def list(cls, **kwargs):
+            calls.append(("PaymentMethod.list", kwargs))
+            return FakePaymentMethodList()
+
+    class FakePaymentIntent:
+        @classmethod
+        def create(cls, **kwargs):
+            calls.append(("PaymentIntent.create", kwargs))
+            return cls()
+
+    class FakeSetupIntentObject:
+        client_secret = "seti_secret_123"
+
+    class FakeSetupIntent:
+        @classmethod
+        def create(cls, **kwargs):
+            calls.append(("SetupIntent.create", kwargs))
+            return FakeSetupIntentObject()
+
 
     class FakeWebhook:
         @classmethod
@@ -165,6 +237,11 @@ def mock_stripe():
         api_key = None
         checkout = FakeCheckout
         billing = FakeBilling
+        billing_portal = FakeBillingPortal
+        Customer = FakeCustomer
+        PaymentMethod = FakePaymentMethod
+        PaymentIntent = FakePaymentIntent
+        SetupIntent = FakeSetupIntent
         Webhook = FakeWebhook
 
     return FakeStripe(), calls

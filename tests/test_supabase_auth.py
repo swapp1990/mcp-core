@@ -192,3 +192,36 @@ def test_supabase_mode_does_not_install_logto_oauth_proxy():
 
     # Logto-only proxy should not exist in Supabase mode.
     assert client.get("/oauth/authorize").status_code == 404
+
+
+def test_supabase_metadata_stays_on_upstream_auth_server_with_mcp_client_id():
+    core = MCPCore(
+        product_name="test",
+        auth_provider="supabase",
+        supabase_url="https://project.supabase.co",
+        supabase_anon_key="sb_publishable_test",
+        supabase_api_resource="https://api.test.app",
+        mcp_supabase_client_id="supabase-mcp-client",
+    )
+    app = FastAPI()
+    core.install_routes(app)
+    client = TestClient(app, follow_redirects=False)
+
+    r = client.get("/.well-known/oauth-protected-resource")
+
+    assert r.status_code == 200
+    assert r.json()["authorization_servers"] == [
+        "https://project.supabase.co/auth/v1"
+    ]
+
+
+def test_supabase_oauth_metadata_url_uses_authorization_server_discovery_path():
+    auth = SupabaseAuth(
+        supabase_url="https://project.supabase.co",
+        anon_key="sb_publishable_test",
+    )
+
+    assert (
+        auth.oauth_metadata_url
+        == "https://project.supabase.co/.well-known/oauth-authorization-server/auth/v1"
+    )

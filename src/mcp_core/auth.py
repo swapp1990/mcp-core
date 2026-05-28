@@ -474,7 +474,25 @@ class SupabaseAuth(BaseAuth):
 
     @property
     def oauth_metadata_url(self) -> str:
-        return f"{self.auth_base_url}/.well-known/openid-configuration"
+        if not self.auth_base_url:
+            return ""
+        from urllib.parse import urlparse, urlunparse
+
+        parsed = urlparse(self.auth_base_url)
+        path = parsed.path.rstrip("/")
+        well_known_path = (
+            f"/.well-known/oauth-authorization-server{path}"
+            if path
+            else "/.well-known/oauth-authorization-server"
+        )
+        return urlunparse((
+            parsed.scheme,
+            parsed.netloc,
+            well_known_path,
+            "",
+            "",
+            "",
+        ))
 
     @property
     def authorize_url(self) -> str:

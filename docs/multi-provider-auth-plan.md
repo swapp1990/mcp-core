@@ -340,9 +340,32 @@ Supabase should not use Logto resource-injection routes.
 For Supabase, prefer the Supabase Auth OAuth Server:
 
 - issuer: `{SUPABASE_AUTH_BASE_URL}`
-- discovery: provider metadata under Supabase Auth
+- discovery: provider metadata under Supabase Auth, normally
+  `{SUPABASE_URL}/.well-known/oauth-authorization-server/auth/v1`
 - authorize/token/register endpoints from discovery where possible
 - consent handled by a downstream app page when Supabase requires it
+
+Current production finding for Writer V2:
+
+- Web login can work through ordinary Supabase Auth while MCP OAuth still
+  fails. They are separate flows.
+- If protected-resource metadata advertises
+  `{SUPABASE_URL}/auth/v1` as the authorization server, the downstream app's
+  MCP readiness check must fetch Supabase OAuth Server metadata instead of
+  assuming Logto-style same-origin `/oauth/*` routes.
+- Supabase OAuth Server must be enabled in the project Auth settings before
+  Claude Code-style MCP OAuth onboarding can work. The disabled state returns
+  a Supabase `feature_disabled` error from OAuth Server discovery/authorize
+  routes even though the normal OIDC metadata endpoint may still respond.
+- Dynamic Client Registration must also be enabled for automatic MCP client
+  onboarding. If DCR is not advertised, users can still sign in on the web,
+  but MCP clients that expect RFC 7591 registration will fail before consent.
+- The downstream app should implement the Supabase Authorization Path
+  (Writer uses `/consent`) with `supabase.auth.oauth` helpers so users can
+  approve or deny MCP clients.
+- `mcp-core` now owns the provider-aware readiness probe as
+  `mcp_core.readiness` / `mcp-core-check-readiness`; downstream scripts should
+  delegate to it instead of duplicating Logto/Supabase onboarding rules.
 
 Important implementation note:
 
@@ -602,4 +625,3 @@ again before coding because auth provider behavior changes over time:
   `https://supabase.com/docs/guides/auth/oauth-server/mcp-authentication`
 - Logto docs for JWT, API resources, and Management API should also be
   rechecked before touching the Logto path.
-

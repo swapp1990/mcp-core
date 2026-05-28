@@ -151,8 +151,10 @@ async def test_stripe_metered_when_subscription_active(billing, mock_db, mock_st
     # Verify MeterEvent was created
     meter_calls = [c for c in calls if c[0] == "billing.MeterEvent.create"]
     assert len(meter_calls) == 1
+    assert meter_calls[0][1]["identifier"].startswith("mcp_paid_tool_")
     assert meter_calls[0][1]["payload"]["stripe_customer_id"] == "cus_abc"
     assert meter_calls[0][1]["payload"]["value"] == "3"
+    assert result["metered_events"][0]["identifier"] == meter_calls[0][1]["identifier"]
 
 
 @pytest.mark.asyncio
@@ -173,17 +175,65 @@ async def test_stripe_meter_event_has_correct_payload(billing, mock_db, mock_str
     assert payload["payload"]["value"] == "8"
 
 
+@pytest.mark.asyncio
+async def test_cancel_meter_events_uses_identifier(billing, mock_stripe):
+    fake_stripe, calls = mock_stripe
+    billing._stripe = fake_stripe
+
+    cancelled = await billing.cancel_meter_events(
+        [{
+            "event_name": "test_tool_calls",
+            "identifier": "mcp_paid_tool_cancel_me",
+            "units": 3,
+            "tool": "paid_tool",
+        }],
+        label="test",
+    )
+
+    assert cancelled == 1
+    adjustments = [c for c in calls if c[0] == "billing.MeterEventAdjustment.create"]
+    assert adjustments == [(
+        "billing.MeterEventAdjustment.create",
+        {
+            "event_name": "test_tool_calls",
+            "type": "cancel",
+            "cancel": {"identifier": "mcp_paid_tool_cancel_me"},
+        },
+    )]
+
+
+@pytest.mark.asyncio
+async def test_refund_charge_refunds_credits_and_cancels_meter_event(billing, mock_db, mock_stripe):
+    fake_stripe, calls = mock_stripe
+    billing._stripe = fake_stripe
+    user = _make_user(free_credits=10, credits_used=3)
+    await mock_db["users"].insert_one(user.copy())
+
+    await billing.refund_charge(
+        mock_db,
+        user,
+        3,
+        "test",
+        metered_events=[{"identifier": "mcp_meter_refund", "event_name": "test_tool_calls"}],
+    )
+
+    db_user = await mock_db["users"].find_one({"logto_user_id": "user_1"})
+    assert db_user["credits_used"] == 0
+    adjustments = [c for c in calls if c[0] == "billing.MeterEventAdjustment.create"]
+    assert len(adjustments) == 1
+
+
 # ── Credits summary ───────────────────────────────────────
 
 def test_credits_summary_shape(billing):
     user = _make_user(free_credits=25, credits_used=10)
     summary = billing.credits_summary(user)
-    assert summary == {
-        "free_credits": 25,
-        "credits_used": 10,
-        "remaining": 15,
-        "has_subscription": False,
-    }
+    assert summary["free_credits"] == 25
+    assert summary["credits_used"] == 10
+    assert summary["remaining"] == 15
+    assert summary["has_subscription"] is False
+    assert summary["pack_options"][0]["id"] == "pack_50"
+    assert summary["auto_recharge"]["enabled"] is False
 
 
 def test_credits_summary_with_subscription(billing):
@@ -237,6 +287,110 @@ async def test_webhook_checkout_completed(billing, mock_db, mock_stripe):
     db_user = await mock_db["users"].find_one({"logto_user_id": "user_wh"})
     assert db_user["stripe_customer_id"] == "cus_new"
     assert db_user["stripe_subscription_id"] == "sub_new"
+
+
+@pytest.mark.asyncio
+async def test_credit_pack_checkout_session_uses_pack_metadata(billing, mock_db, mock_stripe):
+    fake_stripe, calls = mock_stripe
+    billing._stripe = fake_stripe
+    user = _make_user()
+    await mock_db["users"].insert_one(user.copy())
+
+    session = await billing.create_credit_checkout_session(
+        mock_db,
+        user,
+        "pack_50",
+        origin="https://test.app",
+    )
+
+    assert session["url"] == "https://checkout.stripe.com/fake_session_123"
+    create_calls = [c for c in calls if c[0] == "checkout.Session.create"]
+    assert create_calls[-1][1]["mode"] == "payment"
+    assert create_calls[-1][1]["metadata"]["kind"] == "credit_pack"
+    assert create_calls[-1][1]["metadata"]["credits"] == "50"
+
+
+@pytest.mark.asyncio
+async def test_set_auto_recharge_requires_saved_card(billing, mock_db):
+    user = _make_user()
+    await mock_db["users"].insert_one(user.copy())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing.set_auto_recharge(
+            mock_db,
+            user,
+            enabled=True,
+            threshold=10,
+            pack_id="pack_50",
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_maybe_trigger_auto_recharge_creates_off_session_payment(billing, mock_db, mock_stripe):
+    fake_stripe, calls = mock_stripe
+    billing._stripe = fake_stripe
+    user = _make_user(
+        free_credits=10,
+        credits_used=9,
+        stripe_customer_id="cus_auto",
+    )
+    user["auto_recharge"] = {
+        "enabled": True,
+        "threshold": 5,
+        "pack_id": "pack_50",
+        "payment_method_id": "pm_auto",
+    }
+    await mock_db["users"].insert_one(user.copy())
+
+    await billing.maybe_trigger_auto_recharge(mock_db, user)
+
+    payment_calls = [c for c in calls if c[0] == "PaymentIntent.create"]
+    assert len(payment_calls) == 1
+    payload = payment_calls[0][1]
+    assert payload["amount"] == 500
+    assert payload["customer"] == "cus_auto"
+    assert payload["payment_method"] == "pm_auto"
+    assert payload["off_session"] is True
+    assert payload["metadata"]["kind"] == "auto_recharge"
+
+
+@pytest.mark.asyncio
+async def test_auto_recharge_webhook_grants_credits(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+    await mock_db["users"].insert_one(_make_user(free_credits=10, credits_used=9))
+
+    import json
+    from starlette.requests import Request
+
+    event_body = json.dumps({
+        "type": "payment_intent.succeeded",
+        "data": {
+            "object": {
+                "metadata": {
+                    "kind": "auto_recharge",
+                    "logto_user_id": "user_1",
+                    "credits": "50",
+                },
+                "payment_method": "pm_auto",
+            }
+        },
+    }).encode()
+    scope = {
+        "type": "http", "method": "POST", "path": "/",
+        "headers": [(b"stripe-signature", b"test_sig")],
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": event_body}
+
+    await billing.handle_webhook(Request(scope, receive), mock_db, webhook_secret="test")
+
+    db_user = await mock_db["users"].find_one({"logto_user_id": "user_1"})
+    assert db_user["free_credits"] == 60
+    assert db_user["credits_purchased"] == 50
 
 
 @pytest.mark.asyncio

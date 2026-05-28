@@ -84,6 +84,9 @@ class MCPCore:
         stripe_webhook_secret: str = "",
         billing_success_url: str = "",
         billing_cancel_url: str = "",
+        billing_buy_url: str = "",
+        credit_packs: Optional[List[Dict[str, Any]]] = None,
+        auto_recharge_cooldown_sec: int = 120,
         # Tools
         tool_costs: Optional[Dict[str, int]] = None,
         read_only_tools: Optional[Set[str]] = None,
@@ -181,6 +184,12 @@ class MCPCore:
             read_only_tools=_read_only,
             success_url=billing_success_url or _env("BILLING_SUCCESS_URL"),
             cancel_url=billing_cancel_url or _env("BILLING_CANCEL_URL"),
+            buy_url=billing_buy_url or _env("BILLING_BUY_URL"),
+            credit_packs=credit_packs or [],
+            auto_recharge_cooldown_sec=int(
+                auto_recharge_cooldown_sec
+                or _env("AUTO_RECHARGE_COOLDOWN_SEC", "120")
+            ),
         )
 
         # MongoDB

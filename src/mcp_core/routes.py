@@ -243,7 +243,10 @@ def install_routes(app: FastAPI, core: Any) -> None:
         # to this server's own URL so MCP clients discover the proxied
         # OAuth routes (setup_proxies=True in fastapi-mcp).
         base_url = None
-        if core._mcp_app_id:
+        if (
+            core._mcp_app_id
+            and getattr(core.auth, "provider_name", "") == "logto"
+        ):
             base = str(request.base_url).rstrip("/")
             proto = request.headers.get("x-forwarded-proto")
             if proto and base.startswith("http://"):

@@ -117,6 +117,21 @@ Audit trail for every MCP tool call. Writes to MongoDB `tool_logs` collection.
 
 Composable health check builder. Supports sync and async checks with timeouts.
 
+### Readiness (`mcp_core.readiness`)
+
+Provider-aware MCP OAuth onboarding diagnostics. The bundled CLI follows the
+same discovery path as RFC 9728 clients:
+
+```bash
+mcp-core-check-readiness https://your-app.example.com/mcp/v2/
+```
+
+It checks protected-resource metadata, authorization-server discovery, Dynamic
+Client Registration, unauthenticated MCP bearer challenges, and provider-specific
+behavior for Logto and Supabase. For Supabase, it also verifies that the
+authorize endpoint redirects back to your app's consent UI with an
+`authorization_id`.
+
 ## Testing
 
 ```bash
