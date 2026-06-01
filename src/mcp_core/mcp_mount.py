@@ -43,7 +43,7 @@ import asyncio
 import logging
 from typing import Any, Dict, Iterable, Mapping, Optional, Union
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from starlette.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
@@ -81,7 +81,7 @@ def _patch_fastmcp_get_http_headers() -> bool:
     return True
 
 
-def _install_bearer_gate(app: FastAPI, mount_path_v2: str) -> None:
+def _install_bearer_gate(app: FastAPI, mount_path_v2: str, core: Any = None) -> None:
     """Register HTTP middleware that 401s unauthenticated requests to
     ``mount_path_v2`` with ``WWW-Authenticate: Bearer resource_metadata=...``.
 
@@ -98,28 +98,44 @@ def _install_bearer_gate(app: FastAPI, mount_path_v2: str) -> None:
     """
     prefix = mount_path_v2.rstrip("/")
 
+    def _challenge(request, description: str):
+        base = str(request.base_url).rstrip("/")
+        resource_metadata_url = f"{base}/.well-known/oauth-protected-resource"
+        www_authenticate = f'Bearer resource_metadata="{resource_metadata_url}"'
+        return JSONResponse(
+            {
+                "error": "unauthorized",
+                "error_description": description,
+            },
+            status_code=401,
+            headers={"WWW-Authenticate": www_authenticate},
+        )
+
     @app.middleware("http")
     async def _require_bearer_for_v2(request, call_next):
         path = request.url.path
         if path == prefix or path.startswith(prefix + "/"):
             auth = request.headers.get("authorization", "")
             if not auth.lower().startswith("bearer "):
-                base = str(request.base_url).rstrip("/")
-                resource_metadata_url = f"{base}/.well-known/oauth-protected-resource"
-                www_authenticate = (
-                    f'Bearer resource_metadata="{resource_metadata_url}"'
+                return _challenge(
+                    request,
+                    "Authentication required. Discover OAuth metadata via the WWW-Authenticate header.",
                 )
-                return JSONResponse(
-                    {
-                        "error": "unauthorized",
-                        "error_description": (
-                            "Authentication required. Discover OAuth metadata "
-                            "via the WWW-Authenticate header."
-                        ),
-                    },
-                    status_code=401,
-                    headers={"WWW-Authenticate": www_authenticate},
-                )
+            if core is not None and hasattr(core, "auth"):
+                try:
+                    payload = await core.auth.verify_token(request)
+                except HTTPException as exc:
+                    if exc.status_code == 401:
+                        return _challenge(
+                            request,
+                            "Invalid or expired access token. Reauthorize using the OAuth metadata in the WWW-Authenticate header.",
+                        )
+                    raise
+                if payload is None:
+                    return _challenge(
+                        request,
+                        "Authentication required. Discover OAuth metadata via the WWW-Authenticate header.",
+                    )
         return await call_next(request)
 
 
@@ -287,7 +303,7 @@ def mount_mcp(
         # FastMCP's tool runner — FastMCP swallows downstream 401s into
         # JSON-RPC error results, which are useless for OAuth discovery.
         if require_auth:
-            _install_bearer_gate(app, mount_path_v2)
+            _install_bearer_gate(app, mount_path_v2, core=core)
             result["auth_gate"] = True
             logger.info(
                 "[mcp-core] Bearer gate installed at %s (401+WWW-Authenticate)",

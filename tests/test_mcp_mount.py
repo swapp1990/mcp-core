@@ -128,9 +128,32 @@ def test_bearer_gate_returns_401_with_www_authenticate(core: MCPCore, app_with_t
     assert "/.well-known/oauth-protected-resource" in www_auth
 
 
+def test_bearer_gate_rejects_invalid_token_with_www_authenticate(core: MCPCore, app_with_tagged_routes):
+    """Invalid Bearer tokens must return the gate's OAuth challenge so MCP
+    clients can reauthorize instead of surfacing a swallowed tool error."""
+    from fastapi.testclient import TestClient
+
+    core.mount_mcp(app_with_tagged_routes, name="t", tags={"mcp"})
+
+    client = TestClient(app_with_tagged_routes, raise_server_exceptions=False)
+    r = client.post(
+        "/mcp/v2/",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        headers={
+            "Authorization": "Bearer fake-but-shaped-correctly",
+            "Accept": "application/json, text/event-stream",
+        },
+    )
+    assert r.status_code == 401
+    www_auth = r.headers.get("WWW-Authenticate", "")
+    assert www_auth.startswith("Bearer ")
+    assert "resource_metadata=" in www_auth
+    assert "/.well-known/oauth-protected-resource" in www_auth
+
+
 def test_bearer_gate_passes_through_with_token(core: MCPCore, app_with_tagged_routes):
-    """A request carrying a Bearer token must NOT be 401'd by the gate
-    (the downstream FastMCP/route still does its own validation).
+    """A request carrying a valid Bearer token must NOT be 401'd by the gate
+    (the downstream FastMCP/route may still error in this unit test).
 
     raise_server_exceptions=False because TestClient doesn't run the
     composed lifespan that FastMCP's session manager needs — but for
@@ -146,7 +169,7 @@ def test_bearer_gate_passes_through_with_token(core: MCPCore, app_with_tagged_ro
         "/mcp/v2/",
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
         headers={
-            "Authorization": "Bearer fake-but-shaped-correctly",
+            "Authorization": "Bearer dev-bypass",
             "Accept": "application/json, text/event-stream",
         },
     )
