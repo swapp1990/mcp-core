@@ -165,6 +165,7 @@ async def test_billing_sync_route_links_subscription(client, auth_headers, core)
 
 @pytest.mark.asyncio
 async def test_billing_portal_route(client, auth_headers, core):
+    core.billing.portal_configuration_id = "bpc_test_writer"
     await core.db["users"].update_one(
         {"auth_user_id": "logto:user_test_123"},
         {
@@ -183,6 +184,11 @@ async def test_billing_portal_route(client, auth_headers, core):
 
     assert r.status_code == 200
     assert r.json()["url"] == "https://billing.stripe.com/session_123"
+    portal_calls = [
+        call for call in core._stripe_calls
+        if call[0] == "billing_portal.Session.create"
+    ]
+    assert portal_calls[-1][1]["configuration"] == "bpc_test_writer"
 
 
 # ── OAuth metadata ────────────────────────────────────────

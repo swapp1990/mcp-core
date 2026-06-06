@@ -87,6 +87,7 @@ class StripeBilling:
         read_only_tools: Tools that cost 0 (skip billing entirely).
         success_url: Redirect URL after Stripe Checkout completes.
         cancel_url: Redirect URL if user cancels Checkout.
+        portal_configuration_id: Optional Stripe Customer Portal configuration ID.
     """
 
     def __init__(
@@ -106,6 +107,7 @@ class StripeBilling:
         subscription_plan_name: str = "Pro",
         subscription_price_label: str = "",
         subscription_allowed_statuses: Optional[Set[str]] = None,
+        portal_configuration_id: str = "",
     ):
         self.stripe_secret_key = stripe_secret_key
         self.price_id = price_id
@@ -124,6 +126,7 @@ class StripeBilling:
         self.subscription_allowed_statuses = set(
             subscription_allowed_statuses or DEFAULT_SUBSCRIPTION_ACCESS_STATUSES
         )
+        self.portal_configuration_id = portal_configuration_id or ""
 
         self._stripe: Any = None
 
@@ -678,10 +681,13 @@ class StripeBilling:
         customer_id = user.get("stripe_customer_id")
         if not customer_id:
             raise HTTPException(400, "No Stripe customer yet")
-        session = stripe.billing_portal.Session.create(
-            customer=customer_id,
-            return_url=return_url,
-        )
+        params = {
+            "customer": customer_id,
+            "return_url": return_url,
+        }
+        if self.portal_configuration_id:
+            params["configuration"] = self.portal_configuration_id
+        session = stripe.billing_portal.Session.create(**params)
         return {"url": _obj_get(session, "url")}
 
     async def sync_checkout_session(

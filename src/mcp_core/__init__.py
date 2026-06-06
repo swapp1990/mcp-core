@@ -85,6 +85,7 @@ class MCPCore:
         billing_success_url: str = "",
         billing_cancel_url: str = "",
         billing_buy_url: str = "",
+        stripe_portal_configuration_id: str = "",
         credit_packs: Optional[List[Dict[str, Any]]] = None,
         auto_recharge_cooldown_sec: int = 120,
         subscription_required: bool = False,
@@ -189,6 +190,10 @@ class MCPCore:
             success_url=billing_success_url or _env("BILLING_SUCCESS_URL"),
             cancel_url=billing_cancel_url or _env("BILLING_CANCEL_URL"),
             buy_url=billing_buy_url or _env("BILLING_BUY_URL"),
+            portal_configuration_id=(
+                stripe_portal_configuration_id
+                or _env("STRIPE_PORTAL_CONFIGURATION_ID")
+            ),
             credit_packs=credit_packs or [],
             auto_recharge_cooldown_sec=int(
                 auto_recharge_cooldown_sec

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-core-auth"
-version = "0.3.6"
+version = "0.3.7"
 description = "Auth, billing, and logging infrastructure for MCP-first servers."
 readme = "README.md"
 license = "MIT"
