@@ -102,12 +102,25 @@ for existing Logto apps.
 
 ### Billing (`mcp_core.billing.StripeBilling`)
 
-Stripe metered billing with free credit fallback.
+Stripe billing for credit-based products and all-access subscription products.
 
-- Free credits deducted first
-- Stripe metered subscription as fallback
-- 402 with Checkout URL when no credits and no subscription
-- Webhook handler for `checkout.session.completed` and `customer.subscription.created`
+- Credit mode deducts free credits first, then falls back to Stripe metered billing.
+- Subscription mode (`BILLING_MODE=subscription`) requires an active subscription for paid tools and never consumes credits.
+- Standard billing routes include `/api/billing/credits`, `/api/billing/checkout-subscription`, `/api/billing/sync`, `/api/billing/portal`, and `/api/stripe/webhook`.
+- Subscription webhooks track `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.paused`, `customer.subscription.resumed`, `customer.subscription.deleted`, `invoice.payment_failed`, `invoice.payment_action_required`, and `invoice.paid`.
+- Access defaults to `active`, `trialing`, and `past_due`; `unpaid`, `paused`, `incomplete`, `incomplete_expired`, and `canceled` do not grant subscription access.
+- Stripe Customer Portal should handle payment methods, invoices, receipts, and cancellation self-service. Stripe Billing customer-email settings should handle invoice, receipt, failed-payment, and renewal emails; auth providers such as Supabase should remain responsible for auth and security emails.
+
+Useful subscription env vars:
+
+```bash
+BILLING_MODE=subscription
+STRIPE_SECRET_KEY=sk_live_or_test_...
+STRIPE_PRICE_ID=price_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+SUBSCRIPTION_PLAN_NAME="Pro"
+SUBSCRIPTION_PRICE_LABEL="$20/month"
+```
 
 ### Tool Logging (`mcp_core.tool_logging.ToolLogger`)
 

@@ -633,6 +633,61 @@ async def test_webhook_subscription_updated_records_cancel_at_period_end(billing
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event_type", "status", "allows_access"),
+    [
+        ("customer.subscription.paused", "paused", False),
+        ("customer.subscription.resumed", "active", True),
+    ],
+)
+async def test_webhook_subscription_pause_resume_events_update_access(
+    billing,
+    mock_db,
+    mock_stripe,
+    event_type,
+    status,
+    allows_access,
+):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+    billing.subscription_required = True
+    await mock_db["users"].insert_one({
+        "logto_user_id": "user_sub",
+        "stripe_customer_id": "cus_existing",
+        "stripe_subscription_id": "sub_existing",
+        "stripe_subscription_status": "active",
+    })
+
+    import json
+    event_body = json.dumps({
+        "type": event_type,
+        "data": {
+            "object": {
+                "customer": "cus_existing",
+                "id": "sub_existing",
+                "status": status,
+            }
+        },
+    }).encode()
+
+    from starlette.requests import Request
+    scope = {
+        "type": "http", "method": "POST", "path": "/",
+        "headers": [(b"stripe-signature", b"test_sig")],
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": event_body}
+
+    await billing.handle_webhook(Request(scope, receive), mock_db, webhook_secret="test")
+
+    db_user = await mock_db["users"].find_one({"stripe_customer_id": "cus_existing"})
+    assert db_user["stripe_subscription_id"] == "sub_existing"
+    assert db_user["stripe_subscription_status"] == status
+    assert billing.subscription_state(db_user)["allows_access"] is allows_access
+
+
+@pytest.mark.asyncio
 async def test_webhook_subscription_deleted_revokes_access(billing, mock_db, mock_stripe):
     fake_stripe, _ = mock_stripe
     billing._stripe = fake_stripe

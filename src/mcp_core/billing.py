@@ -1,10 +1,10 @@
 """
-Stripe metered billing with free credits for MCP-first servers.
+Stripe billing for MCP-first servers.
 
 Flow:
-1. Free credits deducted first (configurable per product).
-2. After credits exhausted, Stripe metered billing kicks in.
-3. If no payment method on file, returns 402 with Stripe Checkout URL.
+1. Credit mode deducts free credits first, then falls back to Stripe metered billing.
+2. Subscription mode requires an active all-access subscription for paid tools.
+3. If payment setup is missing, paid tools return 402 with Stripe setup context.
 """
 
 import logging
@@ -22,6 +22,12 @@ __all__ = ["StripeBilling"]
 
 DEFAULT_SUBSCRIPTION_ACCESS_STATUSES = {"active", "trialing", "past_due"}
 TERMINAL_SUBSCRIPTION_STATUSES = {"canceled", "incomplete_expired"}
+SUBSCRIPTION_UPDATE_EVENTS = {
+    "customer.subscription.created",
+    "customer.subscription.updated",
+    "customer.subscription.paused",
+    "customer.subscription.resumed",
+}
 
 
 def _obj_get(value: Any, key: str, default: Any = None) -> Any:
@@ -986,7 +992,7 @@ class StripeBilling:
                     logger.info("[billing] +%d credits via auto-recharge for %s", credits, user_id)
             return {"status": "ok", "event": event_type}
 
-        elif event_type in ("customer.subscription.created", "customer.subscription.updated"):
+        elif event_type in SUBSCRIPTION_UPDATE_EVENTS:
             customer_id = data.get("customer", "")
             subscription_id = data.get("id", "")
             fields = self._subscription_update_fields(
