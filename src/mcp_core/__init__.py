@@ -87,6 +87,10 @@ class MCPCore:
         billing_buy_url: str = "",
         credit_packs: Optional[List[Dict[str, Any]]] = None,
         auto_recharge_cooldown_sec: int = 120,
+        subscription_required: bool = False,
+        subscription_plan_name: str = "",
+        subscription_price_label: str = "",
+        subscription_allowed_statuses: Optional[Set[str]] = None,
         # Tools
         tool_costs: Optional[Dict[str, int]] = None,
         read_only_tools: Optional[Set[str]] = None,
@@ -190,6 +194,19 @@ class MCPCore:
                 auto_recharge_cooldown_sec
                 or _env("AUTO_RECHARGE_COOLDOWN_SEC", "120")
             ),
+            subscription_required=(
+                bool(subscription_required)
+                or _env("SUBSCRIPTION_REQUIRED") == "1"
+                or _env("BILLING_MODE").strip().lower()
+                in {"subscription", "subscription_required", "all_access"}
+            ),
+            subscription_plan_name=(
+                subscription_plan_name or _env("SUBSCRIPTION_PLAN_NAME", "Pro")
+            ),
+            subscription_price_label=(
+                subscription_price_label or _env("SUBSCRIPTION_PRICE_LABEL")
+            ),
+            subscription_allowed_statuses=subscription_allowed_statuses,
         )
 
         # MongoDB
@@ -337,9 +354,9 @@ class MCPCore:
 
     # ── FastAPI integration ───────────────────────────────
 
-    def install_routes(self, app: FastAPI) -> None:
+    def install_routes(self, app: FastAPI, *, billing_routes: bool = True) -> None:
         """Register standard routes: /health, /api/billing/credits, webhook, OAuth metadata."""
-        install_routes(app, self)
+        install_routes(app, self, billing_routes=billing_routes)
 
     def mount_mcp(
         self,

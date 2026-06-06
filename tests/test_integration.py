@@ -1,6 +1,7 @@
 """Integration tests -- full auth_and_bill flow via HTTP TestClient."""
 
 import pytest
+from fastapi import FastAPI
 
 
 # ── Free tool ─────────────────────────────────────────────
@@ -114,7 +115,74 @@ def test_credits_endpoint_with_auth(client, auth_headers):
     data = r.json()
     assert "free_credits" in data
     assert "remaining" in data
+    assert "remaining_credits" in data
     assert "has_subscription" in data
+    assert "subscription" in data
+
+
+def test_install_routes_can_skip_billing_web_routes(core):
+    app = FastAPI()
+
+    core.install_routes(app, billing_routes=False)
+
+    paths = {str(getattr(route, "path", "")) for route in app.routes}
+    assert "/health" in paths
+    assert "/api/stripe/webhook" in paths
+    assert "/.well-known/oauth-protected-resource" in paths
+    assert "/api/billing/credits" not in paths
+    assert "/api/billing/checkout-subscription" not in paths
+    assert "/api/billing/portal" not in paths
+
+
+def test_checkout_subscription_route(client, auth_headers, core):
+    r = client.post("/api/billing/checkout-subscription", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["url"] == "https://checkout.stripe.com/fake_session_123"
+    create_calls = [c for c in core._stripe_calls if c[0] == "checkout.Session.create"]
+    payload = create_calls[-1][1]
+    assert payload["mode"] == "subscription"
+    assert payload["metadata"]["kind"] == "metered_subscription"
+    assert payload["subscription_data"]["metadata"]["auth_user_id"] == "logto:user_test_123"
+
+
+@pytest.mark.asyncio
+async def test_billing_sync_route_links_subscription(client, auth_headers, core):
+    client.post("/api/billing/checkout-subscription", headers=auth_headers)
+
+    r = client.post(
+        "/api/billing/sync",
+        json={"session_id": "cs_fake_sync"},
+        headers=auth_headers,
+    )
+
+    assert r.status_code == 200
+    data = r.json()
+    assert data["subscription"]["allows_access"] is True
+    user = await core.db["users"].find_one({"logto_user_id": "user_test_123"})
+    assert user["stripe_subscription_id"] == "sub_synced"
+
+
+@pytest.mark.asyncio
+async def test_billing_portal_route(client, auth_headers, core):
+    await core.db["users"].update_one(
+        {"auth_user_id": "logto:user_test_123"},
+        {
+            "$set": {
+                "auth_provider": "logto",
+                "auth_subject": "user_test_123",
+                "auth_user_id": "logto:user_test_123",
+                "logto_user_id": "user_test_123",
+                "stripe_customer_id": "cus_portal",
+            }
+        },
+        upsert=True,
+    )
+
+    r = client.post("/api/billing/portal", headers=auth_headers)
+
+    assert r.status_code == 200
+    assert r.json()["url"] == "https://billing.stripe.com/session_123"
 
 
 # ── OAuth metadata ────────────────────────────────────────

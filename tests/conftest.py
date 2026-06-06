@@ -153,6 +153,17 @@ def mock_stripe():
             calls.append(("checkout.Session.create", kwargs))
             return cls()
 
+        @classmethod
+        def retrieve(cls, session_id):
+            calls.append(("checkout.Session.retrieve", {"session_id": session_id}))
+            return {
+                "id": session_id,
+                "mode": "subscription",
+                "customer": "cus_synced",
+                "subscription": "sub_synced",
+                "metadata": {},
+            }
+
     class FakeCheckout:
         Session = FakeSession
 
@@ -259,6 +270,8 @@ def core(auth, mock_db, mock_stripe):
         logto_api_resource="https://api.test.app",
         free_credits=10,
         dev_auth_bypass=True,
+        stripe_secret_key="sk_test_fake",
+        stripe_price_id="price_fake",
         tool_costs={"free_tool": 0, "paid_tool": 3, "expensive_tool": 8},
         read_only_tools={"free_tool"},
     )

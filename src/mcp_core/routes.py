@@ -72,7 +72,7 @@ def install_oauth_error_handler(app: FastAPI) -> None:
         )
 
 
-def install_routes(app: FastAPI, core: Any) -> None:
+def install_routes(app: FastAPI, core: Any, *, billing_routes: bool = True) -> None:
     """Register standard infrastructure routes on a FastAPI app."""
     install_oauth_error_handler(app)
 
@@ -222,14 +222,58 @@ def install_routes(app: FastAPI, core: Any) -> None:
     async def health():
         return await core.health.run()
 
-    @app.get("/api/billing/credits")
-    async def get_credits(request: Request):
-        payload = await core.auth.verify_token(request)
-        if payload is None:
-            from fastapi import HTTPException
-            raise HTTPException(401, "Authentication required")
-        user = await core.auth.get_or_create_user(core.db, payload)
-        return core.billing.credits_summary(user)
+    if billing_routes:
+        @app.get("/api/billing/credits")
+        async def get_credits(request: Request):
+            payload = await core.auth.verify_token(request)
+            if payload is None:
+                from fastapi import HTTPException
+                raise HTTPException(401, "Authentication required")
+            user = await core.auth.get_or_create_user(core.db, payload)
+            return core.billing.credits_summary(user)
+
+        @app.post("/api/billing/checkout-subscription")
+        async def checkout_subscription(request: Request):
+            payload = await core.auth.verify_token(request)
+            if payload is None:
+                from fastapi import HTTPException
+                raise HTTPException(401, "Authentication required")
+            user = await core.auth.get_or_create_user(core.db, payload)
+            origin = request.headers.get("origin") or str(request.base_url).rstrip("/")
+            return await core.billing.create_subscription_checkout_session(
+                core.db, user, origin=origin
+            )
+
+        @app.post("/api/billing/sync")
+        async def sync_billing(request: Request):
+            payload = await core.auth.verify_token(request)
+            if payload is None:
+                from fastapi import HTTPException
+                raise HTTPException(401, "Authentication required")
+            user = await core.auth.get_or_create_user(core.db, payload)
+            body = await request.json()
+            return await core.billing.sync_checkout_session(
+                core.db, user, str((body or {}).get("session_id") or "")
+            )
+
+        async def _portal(request: Request):
+            payload = await core.auth.verify_token(request)
+            if payload is None:
+                from fastapi import HTTPException
+                raise HTTPException(401, "Authentication required")
+            user = await core.auth.get_or_create_user(core.db, payload)
+            origin = request.headers.get("origin") or str(request.base_url).rstrip("/")
+            return await core.billing.create_portal_session(
+                user, return_url=f"{origin}/billing"
+            )
+
+        @app.post("/api/billing/portal")
+        async def billing_portal_post(request: Request):
+            return await _portal(request)
+
+        @app.get("/api/billing/portal")
+        async def billing_portal_get(request: Request):
+            return await _portal(request)
 
     @app.post("/api/stripe/webhook")
     async def stripe_webhook(request: Request):

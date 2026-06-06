@@ -242,6 +242,83 @@ def test_credits_summary_with_subscription(billing):
     assert summary["has_subscription"] is True
 
 
+def test_credits_summary_marks_unpaid_subscription_as_no_access(billing):
+    user = _make_user(stripe_subscription_id="sub_abc")
+    user["stripe_subscription_status"] = "unpaid"
+    summary = billing.credits_summary(user)
+    assert summary["has_subscription"] is False
+    assert summary["subscription"]["has_subscription"] is True
+    assert summary["subscription"]["allows_access"] is False
+
+
+@pytest.mark.asyncio
+async def test_subscription_required_blocks_without_subscription(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+    billing.subscription_required = True
+    user = _make_user(free_credits=100, credits_used=0)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing.check_and_deduct(mock_db, user, "paid_tool")
+
+    assert exc_info.value.status_code == 402
+    assert exc_info.value.detail["billing_mode"] == "subscription"
+    assert exc_info.value.detail["subscription"]["allows_access"] is False
+
+
+@pytest.mark.asyncio
+async def test_subscription_required_allows_active_without_deducting(billing, mock_db, mock_stripe):
+    fake_stripe, calls = mock_stripe
+    billing._stripe = fake_stripe
+    billing.subscription_required = True
+    user = _make_user(
+        free_credits=100,
+        credits_used=0,
+        stripe_customer_id="cus_abc",
+        stripe_subscription_id="sub_abc",
+    )
+    user["stripe_subscription_status"] = "active"
+    await mock_db["users"].insert_one(user.copy())
+
+    result = await billing.check_and_deduct(mock_db, user, "paid_tool")
+
+    assert result["source"] == "subscription"
+    assert result["cost"] == 0
+    assert result["included_tool_cost"] == 3
+    db_user = await mock_db["users"].find_one({"logto_user_id": "user_1"})
+    assert db_user["credits_used"] == 0
+    assert [c for c in calls if c[0] == "billing.MeterEvent.create"] == []
+
+
+@pytest.mark.asyncio
+async def test_subscription_required_allows_past_due_grace_status(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+    billing.subscription_required = True
+    user = _make_user(stripe_customer_id="cus_abc", stripe_subscription_id="sub_abc")
+    user["stripe_subscription_status"] = "past_due"
+
+    result = await billing.check_and_deduct(mock_db, user, "paid_tool")
+
+    assert result["source"] == "subscription"
+    assert result["subscription"]["status"] == "past_due"
+
+
+@pytest.mark.asyncio
+async def test_subscription_required_revokes_unpaid_status(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+    billing.subscription_required = True
+    user = _make_user(stripe_customer_id="cus_abc", stripe_subscription_id="sub_abc")
+    user["stripe_subscription_status"] = "unpaid"
+
+    with pytest.raises(HTTPException) as exc_info:
+        await billing.check_and_deduct(mock_db, user, "paid_tool")
+
+    assert exc_info.value.status_code == 402
+    assert exc_info.value.detail["subscription"]["status"] == "unpaid"
+
+
 # ── Webhook handling ──────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -430,6 +507,127 @@ async def test_webhook_subscription_created(billing, mock_db, mock_stripe):
 
     db_user = await mock_db["users"].find_one({"stripe_customer_id": "cus_existing"})
     assert db_user["stripe_subscription_id"] == "sub_fresh"
+    assert db_user["stripe_subscription_status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_subscription_checkout_session_sets_subscription_metadata(billing, mock_db, mock_stripe):
+    fake_stripe, calls = mock_stripe
+    billing._stripe = fake_stripe
+    user = _make_supabase_user()
+    await mock_db["users"].insert_one(user.copy())
+
+    session = await billing.create_subscription_checkout_session(
+        mock_db,
+        user,
+        origin="https://writer.example",
+    )
+
+    assert session["url"] == "https://checkout.stripe.com/fake_session_123"
+    create_calls = [c for c in calls if c[0] == "checkout.Session.create"]
+    payload = create_calls[-1][1]
+    assert payload["mode"] == "subscription"
+    assert payload["metadata"]["auth_user_id"] == "supabase:user_1"
+    assert payload["metadata"]["kind"] == "metered_subscription"
+    assert payload["subscription_data"]["metadata"]["auth_provider"] == "supabase"
+
+
+@pytest.mark.asyncio
+async def test_sync_checkout_session_links_subscription(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+    user = _make_user()
+    await mock_db["users"].insert_one(user.copy())
+
+    result = await billing.sync_checkout_session(mock_db, user, "cs_fake_sync")
+
+    assert result["status"] == "ok"
+    db_user = await mock_db["users"].find_one({"logto_user_id": "user_1"})
+    assert db_user["stripe_customer_id"] == "cus_synced"
+    assert db_user["stripe_subscription_id"] == "sub_synced"
+    assert db_user["stripe_subscription_status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_webhook_subscription_updated_records_cancel_at_period_end(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+    await mock_db["users"].insert_one({
+        "logto_user_id": "user_sub",
+        "stripe_customer_id": "cus_existing",
+        "stripe_subscription_id": "sub_old",
+    })
+
+    import json
+    event_body = json.dumps({
+        "type": "customer.subscription.updated",
+        "data": {
+            "object": {
+                "customer": "cus_existing",
+                "id": "sub_existing",
+                "status": "active",
+                "cancel_at_period_end": True,
+                "current_period_end": 1893456000,
+            }
+        },
+    }).encode()
+
+    from starlette.requests import Request
+    scope = {
+        "type": "http", "method": "POST", "path": "/",
+        "headers": [(b"stripe-signature", b"test_sig")],
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": event_body}
+
+    await billing.handle_webhook(Request(scope, receive), mock_db, webhook_secret="test")
+
+    db_user = await mock_db["users"].find_one({"stripe_customer_id": "cus_existing"})
+    assert db_user["stripe_subscription_id"] == "sub_existing"
+    assert db_user["stripe_subscription_status"] == "active"
+    assert db_user["stripe_subscription_cancel_at_period_end"] is True
+    assert db_user["stripe_subscription_current_period_end"] == 1893456000
+
+
+@pytest.mark.asyncio
+async def test_webhook_subscription_deleted_revokes_access(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+    await mock_db["users"].insert_one({
+        "logto_user_id": "user_sub",
+        "stripe_customer_id": "cus_existing",
+        "stripe_subscription_id": "sub_existing",
+        "stripe_subscription_status": "active",
+    })
+
+    import json
+    event_body = json.dumps({
+        "type": "customer.subscription.deleted",
+        "data": {
+            "object": {
+                "customer": "cus_existing",
+                "id": "sub_existing",
+                "status": "canceled",
+                "current_period_end": 1893456000,
+            }
+        },
+    }).encode()
+
+    from starlette.requests import Request
+    scope = {
+        "type": "http", "method": "POST", "path": "/",
+        "headers": [(b"stripe-signature", b"test_sig")],
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": event_body}
+
+    await billing.handle_webhook(Request(scope, receive), mock_db, webhook_secret="test")
+
+    db_user = await mock_db["users"].find_one({"stripe_customer_id": "cus_existing"})
+    assert db_user["stripe_subscription_id"] is None
+    assert db_user["stripe_subscription_status"] == "canceled"
 
 
 # ── Multiple deductions ──────────────────────────────────

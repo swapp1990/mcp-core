@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["StripeBilling"]
 
+DEFAULT_SUBSCRIPTION_ACCESS_STATUSES = {"active", "trialing", "past_due"}
+TERMINAL_SUBSCRIPTION_STATUSES = {"canceled", "incomplete_expired"}
+
 
 def _obj_get(value: Any, key: str, default: Any = None) -> Any:
     if isinstance(value, dict):
@@ -81,6 +84,10 @@ class StripeBilling:
         buy_url: str = "",
         credit_packs: Optional[List[Dict[str, Any]]] = None,
         auto_recharge_cooldown_sec: int = 120,
+        subscription_required: bool = False,
+        subscription_plan_name: str = "Pro",
+        subscription_price_label: str = "",
+        subscription_allowed_statuses: Optional[Set[str]] = None,
     ):
         self.stripe_secret_key = stripe_secret_key
         self.price_id = price_id
@@ -93,6 +100,12 @@ class StripeBilling:
         self.buy_url = buy_url
         self.credit_packs = list(credit_packs or [])
         self.auto_recharge_cooldown_sec = int(auto_recharge_cooldown_sec)
+        self.subscription_required = bool(subscription_required)
+        self.subscription_plan_name = subscription_plan_name or "Pro"
+        self.subscription_price_label = subscription_price_label or ""
+        self.subscription_allowed_statuses = set(
+            subscription_allowed_statuses or DEFAULT_SUBSCRIPTION_ACCESS_STATUSES
+        )
 
         self._stripe: Any = None
 
@@ -153,6 +166,29 @@ class StripeBilling:
         if isinstance(events, list):
             return [event for event in events if isinstance(event, dict)]
         return []
+
+    def subscription_state(self, user: Dict[str, Any]) -> Dict[str, Any]:
+        subscription_id = user.get("stripe_subscription_id") or ""
+        status = user.get("stripe_subscription_status") or (
+            "active" if subscription_id else ""
+        )
+        allows_access = bool(
+            subscription_id and status in self.subscription_allowed_statuses
+        )
+        return {
+            "plan": self.subscription_plan_name,
+            "price_label": self.subscription_price_label,
+            "required": self.subscription_required,
+            "has_subscription": bool(subscription_id),
+            "allows_access": allows_access,
+            "status": status,
+            "cancel_at_period_end": bool(user.get("stripe_subscription_cancel_at_period_end")),
+            "current_period_end": user.get("stripe_subscription_current_period_end"),
+            "customer_id": user.get("stripe_customer_id") or "",
+        }
+
+    def subscription_allows_access(self, user: Dict[str, Any]) -> bool:
+        return bool(self.subscription_state(user).get("allows_access"))
 
     async def meter_usage(
         self,
@@ -275,6 +311,46 @@ class StripeBilling:
         stripe_customer_id = user.get("stripe_customer_id")
         stripe_subscription_id = user.get("stripe_subscription_id")
 
+        # Subscription products can opt into a standard all-access model:
+        # paid tools require an active subscription and never consume credits
+        # or report metered usage.
+        if self.subscription_required:
+            subscription = self.subscription_state(user)
+            if subscription["allows_access"]:
+                logger.info(
+                    "[billing] Allowed %s via subscription (user=%s, status=%s)",
+                    tool_name, user_id, subscription["status"],
+                )
+                return {
+                    "cost": 0,
+                    "included_tool_cost": cost,
+                    "source": "subscription",
+                    "remaining_credits": max(0, remaining),
+                    "subscription": subscription,
+                }
+            setup_url = self._get_checkout_url(
+                user_id, stripe_customer_id, origin=(
+                    request.headers.get("origin")
+                    or str(request.base_url).rstrip("/")
+                    if request
+                    else None
+                ), user=user
+            )
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "Subscription required",
+                    "message": (
+                        f"{self.subscription_plan_name} is required to use {tool_name}."
+                    ),
+                    "setup_url": setup_url,
+                    "buy_url": setup_url,
+                    "tool": tool_name,
+                    "billing_mode": "subscription",
+                    "subscription": subscription,
+                },
+            )
+
         # Case 1: free credits remaining
         if remaining >= cost:
             if db is not None:
@@ -293,7 +369,7 @@ class StripeBilling:
             }
 
         # Case 2: Stripe subscription active
-        if stripe_subscription_id and stripe_customer_id:
+        if stripe_subscription_id and stripe_customer_id and self.subscription_allows_access(user):
             event = await self.meter_usage(user, cost, tool_name)
             return {
                 "cost": cost,
@@ -345,22 +421,21 @@ class StripeBilling:
             return f"{base}/billing/success"
 
         try:
-            metadata = {
-                "auth_user_id": user_id,
-                "auth_provider": (user or {}).get("auth_provider", ""),
-                "auth_subject": (user or {}).get("auth_subject", ""),
-            }
-            if (user or {}).get("logto_user_id"):
-                metadata["logto_user_id"] = (user or {}).get("logto_user_id", "")
+            metadata = _metadata_for_user(user or {}, kind="metered_subscription")
+            if not metadata.get("auth_user_id"):
+                metadata["auth_user_id"] = user_id
             params: Dict[str, Any] = {
                 "mode": "subscription",
                 "line_items": [{"price": self.price_id}],
                 "success_url": f"{base}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
-                "cancel_url": self.cancel_url or f"{base}/",
+                "cancel_url": self.cancel_url or f"{base}/billing",
                 "metadata": metadata,
+                "subscription_data": {"metadata": metadata},
             }
             if stripe_customer_id:
                 params["customer"] = stripe_customer_id
+            elif (user or {}).get("email"):
+                params["customer_email"] = (user or {}).get("email")
 
             session = stripe.checkout.Session.create(**params)
             return _obj_get(session, "url")
@@ -554,6 +629,9 @@ class StripeBilling:
             success_url=f"{base}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{base}/billing",
             metadata=_metadata_for_user(user, kind="metered_subscription"),
+            subscription_data={
+                "metadata": _metadata_for_user(user, kind="metered_subscription")
+            },
         )
         return {"url": _obj_get(session, "url"), "session_id": _obj_get(session, "id")}
 
@@ -587,6 +665,56 @@ class StripeBilling:
             return_url=return_url,
         )
         return {"url": _obj_get(session, "url")}
+
+    async def sync_checkout_session(
+        self,
+        db: Any,
+        user: Dict[str, Any],
+        session_id: str,
+    ) -> Dict[str, Any]:
+        if not session_id:
+            raise HTTPException(400, "session_id required")
+        stripe = self._get_stripe()
+        if not stripe:
+            raise HTTPException(503, "Billing not configured")
+        session = stripe.checkout.Session.retrieve(session_id)
+        session_dict = (
+            session.to_dict_recursive()
+            if hasattr(session, "to_dict_recursive")
+            else session.to_dict()
+            if hasattr(session, "to_dict")
+            else dict(session)
+        )
+        customer_id = session_dict.get("customer") or user.get("stripe_customer_id") or ""
+        subscription_id = session_dict.get("subscription") or ""
+        mode = session_dict.get("mode") or ""
+        metadata = session_dict.get("metadata") or {}
+        expected_identity = user_identity(user)
+        session_identity = (
+            metadata.get("auth_user_id")
+            or metadata.get("logto_user_id")
+            or session_dict.get("client_reference_id")
+            or expected_identity
+        )
+        if expected_identity and session_identity and session_identity != expected_identity:
+            raise HTTPException(403, "Checkout session belongs to a different user")
+
+        if mode == "subscription" or subscription_id:
+            fields = self._subscription_update_fields(
+                {
+                    "id": subscription_id,
+                    "customer": customer_id,
+                    "status": session_dict.get("subscription_status") or "active",
+                },
+                customer_id=customer_id,
+                subscription_id=subscription_id,
+            )
+            if db is not None:
+                await db["users"].update_one(user_lookup_filter(user), {"$set": fields})
+            updated = {**user, **fields}
+            return {"status": "ok", "subscription": self.subscription_state(updated)}
+
+        return {"status": "ignored", "mode": mode}
 
     async def maybe_trigger_auto_recharge(self, db: Any, user: Dict[str, Any]) -> None:
         if db is None:
@@ -669,14 +797,45 @@ class StripeBilling:
         """Return credit balance for a user."""
         free = user.get("free_credits", 0)
         used = user.get("credits_used", 0)
+        subscription = self.subscription_state(user)
         return {
             "free_credits": free,
             "credits_used": used,
             "remaining": max(0, free - used),
-            "has_subscription": bool(user.get("stripe_subscription_id")),
+            "remaining_credits": max(0, free - used),
+            "has_subscription": bool(subscription["allows_access"]),
+            "billing_mode": "subscription" if self.subscription_required else "credits",
+            "subscription": subscription,
             "credits_purchased": user.get("credits_purchased", 0),
             "pack_options": self.pack_options(),
             "auto_recharge": self.auto_recharge_public_state(user),
+        }
+
+    def _subscription_update_fields(
+        self,
+        data: Dict[str, Any],
+        *,
+        customer_id: str = "",
+        subscription_id: str = "",
+    ) -> Dict[str, Any]:
+        status = data.get("status") or ("active" if subscription_id else "")
+        raw_subscription_id = subscription_id or data.get("id") or ""
+        stored_subscription_id = (
+            None if status in TERMINAL_SUBSCRIPTION_STATUSES else raw_subscription_id
+        )
+        return {
+            "stripe_customer_id": customer_id or data.get("customer") or "",
+            "stripe_subscription_id": stored_subscription_id,
+            "stripe_subscription_status": status,
+            "stripe_subscription_cancel_at_period_end": bool(
+                data.get("cancel_at_period_end")
+            ),
+            "stripe_subscription_current_period_end": data.get("current_period_end"),
+            "stripe_subscription_price_id": (
+                ((((data.get("items") or {}).get("data") or [{}])[0]).get("price") or {}).get("id")
+                if isinstance(data.get("items"), dict)
+                else data.get("price_id")
+            ),
         }
 
     # ── Stripe webhook handler ────────────────────────────
@@ -751,12 +910,15 @@ class StripeBilling:
             ) and (auth_user_id or logto_user_id) and db is not None:
                 await db["users"].update_one(
                     _user_filter_from_metadata(metadata),
-                    {
-                        "$set": {
-                            "stripe_customer_id": customer_id,
-                            "stripe_subscription_id": subscription_id,
-                        }
-                    },
+                    {"$set": self._subscription_update_fields(
+                        {
+                            "id": subscription_id,
+                            "customer": customer_id,
+                            "status": "active",
+                        },
+                        customer_id=customer_id,
+                        subscription_id=subscription_id,
+                    )},
                 )
                 logger.info(
                     "[billing] Linked Stripe customer %s to user %s",
@@ -815,19 +977,14 @@ class StripeBilling:
         elif event_type in ("customer.subscription.created", "customer.subscription.updated"):
             customer_id = data.get("customer", "")
             subscription_id = data.get("id", "")
-            status = data.get("status", "")
             if customer_id and db is not None:
                 await db["users"].update_one(
                     {"stripe_customer_id": customer_id},
-                    {
-                        "$set": {
-                            "stripe_subscription_id": (
-                                subscription_id
-                                if status in ("active", "trialing", "")
-                                else None
-                            )
-                        }
-                    },
+                    {"$set": self._subscription_update_fields(
+                        data,
+                        customer_id=customer_id,
+                        subscription_id=subscription_id,
+                    )},
                 )
             return {"status": "ok", "event": event_type}
 
@@ -836,7 +993,39 @@ class StripeBilling:
             if customer_id and db is not None:
                 await db["users"].update_one(
                     {"stripe_customer_id": customer_id},
-                    {"$set": {"stripe_subscription_id": None}},
+                    {"$set": {
+                        "stripe_subscription_id": None,
+                        "stripe_subscription_status": "canceled",
+                        "stripe_subscription_cancel_at_period_end": False,
+                        "stripe_subscription_current_period_end": data.get("current_period_end"),
+                        "stripe_subscription_ended_at": data.get("ended_at") or int(time.time()),
+                    }},
+                )
+            return {"status": "ok", "event": event_type}
+
+        elif event_type in ("invoice.payment_failed", "invoice.payment_action_required"):
+            customer_id = data.get("customer", "")
+            subscription_id = data.get("subscription", "")
+            if customer_id and db is not None:
+                await db["users"].update_one(
+                    {"stripe_customer_id": customer_id},
+                    {"$set": {
+                        "stripe_subscription_id": subscription_id,
+                        "stripe_subscription_status": "past_due",
+                    }},
+                )
+            return {"status": "ok", "event": event_type}
+
+        elif event_type in ("invoice.paid", "invoice.payment_succeeded"):
+            customer_id = data.get("customer", "")
+            subscription_id = data.get("subscription", "")
+            if customer_id and subscription_id and db is not None:
+                await db["users"].update_one(
+                    {"stripe_customer_id": customer_id},
+                    {"$set": {
+                        "stripe_subscription_id": subscription_id,
+                        "stripe_subscription_status": "active",
+                    }},
                 )
             return {"status": "ok", "event": event_type}
 
