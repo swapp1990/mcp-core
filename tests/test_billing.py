@@ -511,6 +511,48 @@ async def test_webhook_subscription_created(billing, mock_db, mock_stripe):
 
 
 @pytest.mark.asyncio
+async def test_webhook_subscription_created_upserts_from_metadata(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+
+    import json
+    event_body = json.dumps({
+        "type": "customer.subscription.created",
+        "data": {
+            "object": {
+                "customer": "cus_new",
+                "id": "sub_new",
+                "status": "active",
+                "metadata": {
+                    "auth_user_id": "supabase:user_meta",
+                    "auth_provider": "supabase",
+                    "auth_subject": "user_meta",
+                    "kind": "metered_subscription",
+                },
+            }
+        },
+    }).encode()
+
+    from starlette.requests import Request
+    scope = {
+        "type": "http", "method": "POST", "path": "/",
+        "headers": [(b"stripe-signature", b"test_sig")],
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": event_body}
+
+    result = await billing.handle_webhook(Request(scope, receive), mock_db, webhook_secret="test")
+    assert result["status"] == "ok"
+
+    db_user = await mock_db["users"].find_one({"auth_user_id": "supabase:user_meta"})
+    assert db_user["stripe_customer_id"] == "cus_new"
+    assert db_user["stripe_subscription_id"] == "sub_new"
+    assert db_user["stripe_subscription_status"] == "active"
+    assert db_user["auth_provider"] == "supabase"
+
+
+@pytest.mark.asyncio
 async def test_subscription_checkout_session_sets_subscription_metadata(billing, mock_db, mock_stripe):
     fake_stripe, calls = mock_stripe
     billing._stripe = fake_stripe
@@ -631,6 +673,47 @@ async def test_webhook_subscription_deleted_revokes_access(billing, mock_db, moc
 
 
 # ── Multiple deductions ──────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_webhook_subscription_deleted_upserts_from_metadata(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+
+    import json
+    event_body = json.dumps({
+        "type": "customer.subscription.deleted",
+        "data": {
+            "object": {
+                "customer": "cus_new",
+                "id": "sub_new",
+                "status": "canceled",
+                "ended_at": 1893456001,
+                "metadata": {
+                    "auth_user_id": "supabase:user_deleted",
+                    "auth_provider": "supabase",
+                    "auth_subject": "user_deleted",
+                },
+            }
+        },
+    }).encode()
+
+    from starlette.requests import Request
+    scope = {
+        "type": "http", "method": "POST", "path": "/",
+        "headers": [(b"stripe-signature", b"test_sig")],
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": event_body}
+
+    await billing.handle_webhook(Request(scope, receive), mock_db, webhook_secret="test")
+
+    db_user = await mock_db["users"].find_one({"auth_user_id": "supabase:user_deleted"})
+    assert db_user["stripe_customer_id"] == "cus_new"
+    assert db_user["stripe_subscription_id"] is None
+    assert db_user["stripe_subscription_status"] == "canceled"
+    assert db_user["stripe_subscription_ended_at"] == 1893456001
+
 
 @pytest.mark.asyncio
 async def test_multiple_deductions_serial(billing, mock_db, mock_stripe):

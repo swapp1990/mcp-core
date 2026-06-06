@@ -57,6 +57,18 @@ def _user_filter_from_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
     return clauses[0] if len(clauses) == 1 else {"$or": clauses}
 
 
+def _user_insert_from_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    fields: Dict[str, Any] = {}
+    for key in ("auth_user_id", "auth_provider", "auth_subject", "logto_user_id"):
+        value = metadata.get(key)
+        if value:
+            fields[key] = value
+    if fields:
+        fields.setdefault("free_credits", 0)
+        fields.setdefault("credits_used", 0)
+    return fields
+
+
 class StripeBilling:
     """Stripe metered billing with free credit fallback.
 
@@ -977,30 +989,57 @@ class StripeBilling:
         elif event_type in ("customer.subscription.created", "customer.subscription.updated"):
             customer_id = data.get("customer", "")
             subscription_id = data.get("id", "")
+            fields = self._subscription_update_fields(
+                data,
+                customer_id=customer_id,
+                subscription_id=subscription_id,
+            )
             if customer_id and db is not None:
-                await db["users"].update_one(
+                result = await db["users"].update_one(
                     {"stripe_customer_id": customer_id},
-                    {"$set": self._subscription_update_fields(
-                        data,
-                        customer_id=customer_id,
-                        subscription_id=subscription_id,
-                    )},
+                    {"$set": fields},
                 )
+                if getattr(result, "matched_count", 0) == 0:
+                    metadata = data.get("metadata", {}) or {}
+                    if metadata.get("auth_user_id") or metadata.get("logto_user_id"):
+                        update = {"$set": fields}
+                        insert_fields = _user_insert_from_metadata(metadata)
+                        if insert_fields:
+                            update["$setOnInsert"] = insert_fields
+                        await db["users"].update_one(
+                            _user_filter_from_metadata(metadata),
+                            update,
+                            upsert=True,
+                        )
             return {"status": "ok", "event": event_type}
 
         elif event_type == "customer.subscription.deleted":
             customer_id = data.get("customer", "")
+            fields = {
+                "stripe_customer_id": customer_id,
+                "stripe_subscription_id": None,
+                "stripe_subscription_status": "canceled",
+                "stripe_subscription_cancel_at_period_end": False,
+                "stripe_subscription_current_period_end": data.get("current_period_end"),
+                "stripe_subscription_ended_at": data.get("ended_at") or int(time.time()),
+            }
             if customer_id and db is not None:
-                await db["users"].update_one(
+                result = await db["users"].update_one(
                     {"stripe_customer_id": customer_id},
-                    {"$set": {
-                        "stripe_subscription_id": None,
-                        "stripe_subscription_status": "canceled",
-                        "stripe_subscription_cancel_at_period_end": False,
-                        "stripe_subscription_current_period_end": data.get("current_period_end"),
-                        "stripe_subscription_ended_at": data.get("ended_at") or int(time.time()),
-                    }},
+                    {"$set": fields},
                 )
+                if getattr(result, "matched_count", 0) == 0:
+                    metadata = data.get("metadata", {}) or {}
+                    if metadata.get("auth_user_id") or metadata.get("logto_user_id"):
+                        update = {"$set": fields}
+                        insert_fields = _user_insert_from_metadata(metadata)
+                        if insert_fields:
+                            update["$setOnInsert"] = insert_fields
+                        await db["users"].update_one(
+                            _user_filter_from_metadata(metadata),
+                            update,
+                            upsert=True,
+                        )
             return {"status": "ok", "event": event_type}
 
         elif event_type in ("invoice.payment_failed", "invoice.payment_action_required"):
