@@ -569,6 +569,7 @@ async def test_subscription_checkout_session_sets_subscription_metadata(billing,
     create_calls = [c for c in calls if c[0] == "checkout.Session.create"]
     payload = create_calls[-1][1]
     assert payload["mode"] == "subscription"
+    assert payload["line_items"] == [{"price": billing.price_id, "quantity": 1}]
     assert payload["metadata"]["auth_user_id"] == "supabase:user_1"
     assert payload["metadata"]["kind"] == "metered_subscription"
     assert payload["subscription_data"]["metadata"]["auth_provider"] == "supabase"

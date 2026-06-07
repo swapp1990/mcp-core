@@ -447,7 +447,7 @@ class StripeBilling:
                 metadata["auth_user_id"] = user_id
             params: Dict[str, Any] = {
                 "mode": "subscription",
-                "line_items": [{"price": self.price_id}],
+                "line_items": [{"price": self.price_id, "quantity": 1}],
                 "success_url": f"{base}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
                 "cancel_url": self.cancel_url or f"{base}/billing",
                 "metadata": metadata,
@@ -645,7 +645,7 @@ class StripeBilling:
         session = stripe.checkout.Session.create(
             mode="subscription",
             payment_method_types=["card"],
-            line_items=[{"price": self.price_id}],
+            line_items=[{"price": self.price_id, "quantity": 1}],
             customer=customer_id,
             success_url=f"{base}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{base}/billing",
