@@ -40,6 +40,7 @@ without raising.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Dict, Iterable, Mapping, Optional, Union
 
@@ -47,6 +48,24 @@ from fastapi import FastAPI, HTTPException
 from starlette.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
+
+# JSON-RPC methods that are safe to serve to anonymous callers: the MCP
+# handshake + read-only discovery surface. Enumerating these lets directory
+# scanners (Smithery, mcp.so, Glama) list a server's capabilities without
+# credentials, while tool *execution* (tools/call) stays gated per-tool.
+_PUBLIC_MCP_METHODS = frozenset({
+    "initialize",
+    "notifications/initialized",
+    "notifications/cancelled",
+    "notifications/progress",
+    "ping",
+    "tools/list",
+    "prompts/list",
+    "resources/list",
+    "resources/templates/list",
+    "completion/complete",
+    "logging/setLevel",
+})
 
 # Module-level flag so we patch fastmcp's get_http_headers exactly once
 # per process even if mount_mcp is called multiple times (tests, multi-app
@@ -81,7 +100,13 @@ def _patch_fastmcp_get_http_headers() -> bool:
     return True
 
 
-def _install_bearer_gate(app: FastAPI, mount_path_v2: str, core: Any = None) -> None:
+def _install_bearer_gate(
+    app: FastAPI,
+    mount_path_v2: str,
+    core: Any = None,
+    public_discovery: bool = False,
+    anonymous_tools: Optional[Iterable[str]] = None,
+) -> None:
     """Register HTTP middleware that 401s unauthenticated requests to
     ``mount_path_v2`` with ``WWW-Authenticate: Bearer resource_metadata=...``.
 
@@ -92,11 +117,27 @@ def _install_bearer_gate(app: FastAPI, mount_path_v2: str, core: Any = None) -> 
     cannot self-recover the auth state — the symptom users observe as
     "MCP server connected but unauthenticated".
 
+    Two modes:
+
+    * **Strict (default, ``public_discovery=False``)** — every request to
+      ``mount_path_v2`` needs a valid Bearer token, else it's challenged.
+      This is the original behavior; unchanged for existing callers.
+
+    * **Public-discovery (``public_discovery=True``)** — the JSON-RPC method
+      is inspected. Handshake + read-only discovery methods
+      (``initialize``, ``tools/list``, ``ping``, notifications, …) are served
+      anonymously so directory scanners can enumerate capabilities. A
+      ``tools/call`` is served anonymously only when its tool name is in
+      ``anonymous_tools`` (free, no-identity tools); any other ``tools/call``
+      still gets the 401 + ``WWW-Authenticate`` challenge so OAuth
+      auto-discovery fires the first time a model invokes a paid tool.
+
     Scoped strictly to ``mount_path_v2``; SSE legacy at /mcp is left
     untouched so anonymous read-only callers using the legacy transport
     keep working.
     """
     prefix = mount_path_v2.rstrip("/")
+    anon_tools = set(anonymous_tools or ())
 
     def _challenge(request, description: str):
         base = str(request.base_url).rstrip("/")
@@ -111,31 +152,75 @@ def _install_bearer_gate(app: FastAPI, mount_path_v2: str, core: Any = None) -> 
             headers={"WWW-Authenticate": www_authenticate},
         )
 
+    async def _has_valid_token(request) -> bool:
+        """True iff the request carries a Bearer token that verifies."""
+        auth = request.headers.get("authorization", "")
+        if not auth.lower().startswith("bearer "):
+            return False
+        if core is None or not hasattr(core, "auth"):
+            # No verifier available — presence of a Bearer token is all we can
+            # assert. (Matches the original gate's behavior in that case.)
+            return True
+        try:
+            payload = await core.auth.verify_token(request)
+        except HTTPException as exc:
+            if exc.status_code == 401:
+                return False
+            raise
+        return payload is not None
+
+    def _rpc_needs_auth(payload: Any) -> bool:
+        """True if a JSON-RPC payload contains any method that must be
+        authenticated (not a public discovery method, not an
+        anonymous-allowed ``tools/call``). Handles single objects and
+        batches; unknown methods are treated as public (non-billable —
+        downstream returns method-not-found)."""
+        msgs = payload if isinstance(payload, list) else [payload]
+        for m in msgs:
+            if not isinstance(m, dict):
+                return True
+            method = m.get("method")
+            if method in _PUBLIC_MCP_METHODS:
+                continue
+            if method == "tools/call":
+                tool = (m.get("params") or {}).get("name")
+                if tool in anon_tools:
+                    continue
+                return True
+            # Other / future protocol methods: serve anonymously.
+            continue
+        return False
+
     @app.middleware("http")
     async def _require_bearer_for_v2(request, call_next):
         path = request.url.path
-        if path == prefix or path.startswith(prefix + "/"):
-            auth = request.headers.get("authorization", "")
-            if not auth.lower().startswith("bearer "):
+        if not (path == prefix or path.startswith(prefix + "/")):
+            return await call_next(request)
+
+        # Strict mode: original behavior — any request needs a valid token.
+        if not public_discovery:
+            if not await _has_valid_token(request):
                 return _challenge(
                     request,
                     "Authentication required. Discover OAuth metadata via the WWW-Authenticate header.",
                 )
-            if core is not None and hasattr(core, "auth"):
-                try:
-                    payload = await core.auth.verify_token(request)
-                except HTTPException as exc:
-                    if exc.status_code == 401:
-                        return _challenge(
-                            request,
-                            "Invalid or expired access token. Reauthorize using the OAuth metadata in the WWW-Authenticate header.",
-                        )
-                    raise
-                if payload is None:
-                    return _challenge(
-                        request,
-                        "Authentication required. Discover OAuth metadata via the WWW-Authenticate header.",
-                    )
+            return await call_next(request)
+
+        # Public-discovery mode: only POSTed JSON-RPC carries methods worth
+        # inspecting; pass other verbs (GET/DELETE stream control) through.
+        if request.method != "POST":
+            return await call_next(request)
+        try:
+            raw = await request.body()
+            payload = json.loads(raw) if raw else {}
+        except Exception:
+            payload = None  # unparseable → fall through to the strict check
+        needs_auth = True if payload is None else _rpc_needs_auth(payload)
+        if needs_auth and not await _has_valid_token(request):
+            return _challenge(
+                request,
+                "Authentication required for this tool. Reauthorize using the OAuth metadata in the WWW-Authenticate header.",
+            )
         return await call_next(request)
 
 
@@ -208,6 +293,8 @@ def mount_mcp(
     mount_path_v2: str = "/mcp/v2",
     instructions: str = "",
     require_auth: bool = True,
+    public_discovery: bool = False,
+    anonymous_tools: Optional[Iterable[str]] = None,
     tool_titles: Optional[Mapping[str, Union[str, Mapping[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     """Mount fastapi-mcp SSE + FastMCP v3 stateless HTTP on `app`.
@@ -303,11 +390,18 @@ def mount_mcp(
         # FastMCP's tool runner — FastMCP swallows downstream 401s into
         # JSON-RPC error results, which are useless for OAuth discovery.
         if require_auth:
-            _install_bearer_gate(app, mount_path_v2, core=core)
+            _install_bearer_gate(
+                app, mount_path_v2, core=core,
+                public_discovery=public_discovery,
+                anonymous_tools=anonymous_tools,
+            )
             result["auth_gate"] = True
+            result["public_discovery"] = public_discovery
             logger.info(
-                "[mcp-core] Bearer gate installed at %s (401+WWW-Authenticate)",
+                "[mcp-core] Bearer gate installed at %s (401+WWW-Authenticate)%s",
                 mount_path_v2,
+                " [public-discovery: initialize/tools/list + %d anon tool(s)]"
+                % len(set(anonymous_tools or ())) if public_discovery else "",
             )
 
         app.mount(mount_path_v2, v2_app)

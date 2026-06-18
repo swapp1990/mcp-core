@@ -24,7 +24,7 @@ Usage:
 
 import logging
 import os
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 from fastapi import FastAPI, Request
 
@@ -375,12 +375,19 @@ class MCPCore:
         mount_path_v2: str = "/mcp/v2",
         instructions: str = "",
         require_auth: bool = True,
+        public_discovery: bool = False,
+        anonymous_tools: Optional[Iterable[str]] = None,
         tool_titles: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Mount MCP transports (legacy SSE + stateless HTTP).
 
         See `mcp_core.mcp_mount.mount_mcp` for full docs. This method
         forwards `self` as `core` so callers don't repeat it.
+
+        ``public_discovery`` + ``anonymous_tools`` open the handshake /
+        ``tools/list`` surface (and the named free tools) to anonymous
+        callers so directory scanners can enumerate capabilities, while
+        paid ``tools/call`` stays gated. Defaults preserve strict auth.
         """
         return mount_mcp(
             app,
@@ -393,6 +400,8 @@ class MCPCore:
             mount_path_v2=mount_path_v2,
             instructions=instructions,
             require_auth=require_auth,
+            public_discovery=public_discovery,
+            anonymous_tools=anonymous_tools,
             tool_titles=tool_titles,
         )
 
