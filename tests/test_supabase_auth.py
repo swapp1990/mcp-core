@@ -169,7 +169,12 @@ def test_mcpcore_infers_supabase_provider_from_env(monkeypatch):
     assert isinstance(core.auth, SupabaseAuth)
 
 
-def test_supabase_mode_does_not_install_logto_oauth_proxy():
+def test_supabase_mode_installs_origin_oauth_proxy():
+    """Supabase mode proxies OAuth through our own origin so origin-relative
+    MCP clients (Claude Code) resolve the flow instead of dead-ending on a
+    non-existent <origin>/authorize. protected-resource must point
+    authorization_servers at our origin, AS metadata must advertise our
+    /oauth/* endpoints, and /oauth/authorize must 307 to Supabase."""
     core = MCPCore(
         product_name="test",
         auth_provider="supabase",
@@ -181,38 +186,46 @@ def test_supabase_mode_does_not_install_logto_oauth_proxy():
     core.install_routes(app)
     client = TestClient(app, follow_redirects=False)
 
-    r = client.get(
-        "/.well-known/oauth-protected-resource",
-    )
+    # protected-resource → our origin (not supabase.co directly)
+    r = client.get("/.well-known/oauth-protected-resource")
     assert r.status_code == 200
     assert r.json()["resource"] == "https://api.test.app"
-    assert r.json()["authorization_servers"] == [
-        "https://project.supabase.co/auth/v1"
-    ]
+    assert r.json()["authorization_servers"] == ["http://testserver"]
 
-    # Logto-only proxy should not exist in Supabase mode.
-    assert client.get("/oauth/authorize").status_code == 404
-
-
-def test_supabase_metadata_stays_on_upstream_auth_server_with_mcp_client_id():
-    core = MCPCore(
-        product_name="test",
-        auth_provider="supabase",
-        supabase_url="https://project.supabase.co",
-        supabase_anon_key="sb_publishable_test",
-        supabase_api_resource="https://api.test.app",
-        mcp_supabase_client_id="supabase-mcp-client",
+    # AS metadata served at our origin, endpoints rewritten to our proxies
+    md = client.get("/.well-known/oauth-authorization-server")
+    assert md.status_code == 200
+    meta = md.json()
+    assert meta["authorization_endpoint"] == "http://testserver/oauth/authorize"
+    assert meta["token_endpoint"] == "http://testserver/oauth/token"
+    # DCR stays direct against Supabase (works as-is)
+    assert meta["registration_endpoint"] == (
+        "https://project.supabase.co/auth/v1/oauth/clients/register"
     )
-    app = FastAPI()
-    core.install_routes(app)
-    client = TestClient(app, follow_redirects=False)
 
-    r = client.get("/.well-known/oauth-protected-resource")
-
-    assert r.status_code == 200
-    assert r.json()["authorization_servers"] == [
-        "https://project.supabase.co/auth/v1"
-    ]
+    # /oauth/authorize 307-redirects to Supabase's real authorize endpoint,
+    # forwarding PKCE/state/redirect_uri and dropping `resource`.
+    az = client.get(
+        "/oauth/authorize",
+        params={
+            "response_type": "code",
+            "client_id": "abc",
+            "redirect_uri": "http://localhost:3118/callback",
+            "scope": "openid",
+            "state": "s",
+            "code_challenge": "xyz",
+            "code_challenge_method": "S256",
+            "resource": "https://api.test.app/",
+        },
+    )
+    assert az.status_code == 307
+    loc = az.headers["location"]
+    assert loc.startswith(
+        "https://project.supabase.co/auth/v1/oauth/authorize?"
+    )
+    assert "code_challenge=xyz" in loc
+    assert "redirect_uri=http%3A%2F%2Flocalhost%3A3118%2Fcallback" in loc
+    assert "resource=" not in loc  # RFC 8707 param dropped for Supabase
 
 
 def test_supabase_oauth_metadata_url_uses_authorization_server_discovery_path():

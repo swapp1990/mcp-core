@@ -218,6 +218,114 @@ def install_routes(app: FastAPI, core: Any, *, billing_routes: bool = True) -> N
             meta["registration_endpoint"] = f"{base}/oauth/register"
             return meta
 
+    # ── Supabase OAuth proxy (origin-relative authorize/token) ──────────
+    # Claude Code and the MCP SDK clients drive OAuth against the RESOURCE
+    # SERVER's own origin: they fetch <origin>/.well-known/oauth-authorization-
+    # server and use ITS authorization_endpoint. They do NOT chase an external
+    # `authorization_servers` pointer off to supabase.co. So when Supabase's AS
+    # was only reachable at supabase.co, those clients fell back to the default
+    # <origin>/authorize (which doesn't exist) and dead-ended on the SPA shell —
+    # the user sees a blank "Waiting for authorization…". Fix: serve AS metadata
+    # at our origin and proxy /oauth/authorize + /oauth/token to Supabase, with
+    # authorization_servers pointed back at our origin (handled in the
+    # protected-resource handler below). No `resource` injection (unlike Logto):
+    # Supabase tokens are validated by introspection at /auth/v1/user, not by an
+    # audience claim, and Supabase's OAuth server rejects unknown params.
+    elif (
+        getattr(core.auth, "provider_name", "") == "supabase"
+        and getattr(core.auth, "auth_base_url", "")
+    ):
+        from urllib.parse import urlencode
+
+        import httpx
+        from fastapi import Response
+        from fastapi.responses import JSONResponse, RedirectResponse
+
+        _sb_base = core.auth.auth_base_url.rstrip("/")
+        _authorize_upstream = f"{_sb_base}/oauth/authorize"
+        _token_upstream = f"{_sb_base}/oauth/token"
+        _register_upstream = f"{_sb_base}/oauth/clients/register"
+        _metadata_upstream = f"{_sb_base}/.well-known/oauth-authorization-server"
+        _anon_key = getattr(core.auth, "anon_key", "")
+        _sb_scopes = list(
+            getattr(core, "_oauth_scopes", None) or ["openid", "profile", "email"]
+        )
+
+        def _sb_public_base_url(request: Request) -> str:
+            base = str(request.base_url).rstrip("/")
+            proto = request.headers.get("x-forwarded-proto")
+            if proto and base.startswith("http://"):
+                base = f"{proto}://{base[7:]}"
+            return base
+
+        @app.get("/oauth/authorize")
+        async def supabase_authorize_proxy(request: Request):
+            qp = dict(request.query_params)
+            scope_set = set((qp.get("scope", "") or "").split())
+            for s in _sb_scopes:
+                scope_set.add(s)
+            forward = {
+                "response_type": qp.get("response_type", "code"),
+                "client_id": qp.get("client_id", ""),
+                "redirect_uri": qp.get("redirect_uri", ""),
+                "scope": " ".join(sorted(scope_set)),
+            }
+            for k in (
+                "state", "code_challenge", "code_challenge_method",
+                "prompt", "nonce", "response_mode",
+            ):
+                if qp.get(k):
+                    forward[k] = qp[k]
+            # Deliberately drop `resource` (RFC 8707) — Supabase's OAuth server
+            # rejects unknown params and the token needs no audience binding.
+            return RedirectResponse(
+                url=f"{_authorize_upstream}?{urlencode(forward)}",
+                status_code=307,
+            )
+
+        @app.post("/oauth/token")
+        async def supabase_token_proxy(request: Request):
+            form = await request.form()
+            data = {k: v for k, v in form.items()}
+            data.pop("resource", None)
+            fwd_headers = {}
+            if _anon_key:
+                fwd_headers["apikey"] = _anon_key
+            if "authorization" in request.headers:
+                fwd_headers["Authorization"] = request.headers["authorization"]
+            async with httpx.AsyncClient(timeout=15) as c:
+                resp = await c.post(
+                    _token_upstream, data=data, headers=fwd_headers
+                )
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                media_type=resp.headers.get("content-type", "application/json"),
+            )
+
+        @app.get("/.well-known/oauth-authorization-server")
+        async def supabase_metadata_proxy(request: Request):
+            try:
+                async with httpx.AsyncClient(timeout=10) as c:
+                    resp = await c.get(_metadata_upstream)
+                meta = resp.json() if resp.status_code == 200 else {}
+            except Exception:
+                meta = {}
+            base = _sb_public_base_url(request)
+            meta.setdefault("issuer", _sb_base)
+            meta["authorization_endpoint"] = f"{base}/oauth/authorize"
+            meta["token_endpoint"] = f"{base}/oauth/token"
+            # DCR already works directly against Supabase (Claude Code registers
+            # there fine), so advertise the upstream register endpoint as-is.
+            meta.setdefault("registration_endpoint", _register_upstream)
+            meta.setdefault("response_types_supported", ["code"])
+            meta.setdefault(
+                "grant_types_supported", ["authorization_code", "refresh_token"]
+            )
+            meta.setdefault("code_challenge_methods_supported", ["S256"])
+            meta.setdefault("scopes_supported", _sb_scopes)
+            return JSONResponse(meta)
+
     @app.get("/health")
     async def health():
         return await core.health.run()
@@ -287,9 +395,14 @@ def install_routes(app: FastAPI, core: Any, *, billing_routes: bool = True) -> N
         # to this server's own URL so MCP clients discover the proxied
         # OAuth routes (setup_proxies=True in fastapi-mcp).
         base_url = None
-        if (
-            core._mcp_app_id
-            and getattr(core.auth, "provider_name", "") == "logto"
+        _provider = getattr(core.auth, "provider_name", "")
+        # Point authorization_servers at our own origin when we proxy OAuth:
+        #   - Logto: setup_proxies=True (gated on _mcp_app_id)
+        #   - Supabase: the /oauth/* proxy above (gated on auth_base_url) — this
+        #     is what makes Claude Code's origin-relative discovery resolve
+        #     instead of dead-ending on a non-existent <origin>/authorize.
+        if (core._mcp_app_id and _provider == "logto") or (
+            _provider == "supabase" and getattr(core.auth, "auth_base_url", "")
         ):
             base = str(request.base_url).rstrip("/")
             proto = request.headers.get("x-forwarded-proto")
