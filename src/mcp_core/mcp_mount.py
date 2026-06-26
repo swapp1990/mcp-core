@@ -281,6 +281,98 @@ def _apply_tool_titles(
     return updated
 
 
+def _wrap_image_result_tools(fastmcp_server: Any, image_tools: Iterable[str]) -> int:
+    """Make the named tools return a rendered MCP ImageContent block (base64
+    PNG) alongside their structured JSON, so MCP clients (ChatGPT, Claude)
+    display the generated image INLINE instead of just a URL.
+
+    `from_fastapi` only ever emits ``structured_content`` (the route's JSON), so
+    an image-generation tool's result is a link, not a picture. Here we wrap the
+    tool's ``run`` to scan the structured result for image URLs, fetch + base64
+    them, and prepend ImageContent items. The structured content is preserved
+    for programmatic clients. Only the FastMCP (/mcp/v2) transport is affected;
+    the plain /api/mcp REST routes are untouched.
+
+    Returns the number of tools wrapped.
+    """
+    import base64
+    import re
+
+    try:
+        import httpx
+        from mcp.types import ImageContent
+        from fastmcp.tools.tool import ToolResult
+        from fastmcp.server.middleware import Middleware
+    except ImportError:
+        return 0
+
+    want = set(image_tools or ())
+    if not want:
+        return 0
+
+    _IMG_RE = re.compile(r"https?://[^\s\"'<>]+?\.(?:png|jpg|jpeg|webp|gif)", re.I)
+
+    def _find_image_urls(obj: Any) -> list:
+        out: list = []
+        seen: set = set()
+
+        def walk(o: Any) -> None:
+            if isinstance(o, str):
+                m = _IMG_RE.search(o)
+                if m and m.group(0) not in seen:
+                    seen.add(m.group(0))
+                    out.append(m.group(0))
+            elif isinstance(o, dict):
+                for v in o.values():
+                    walk(v)
+            elif isinstance(o, (list, tuple)):
+                for v in o:
+                    walk(v)
+
+        walk(obj)
+        return out
+
+    # FastMCP tools are frozen Pydantic models (can't patch .run); the supported
+    # hook for post-processing a result is server middleware (on_call_tool).
+    class _ImageResultMiddleware(Middleware):
+        async def on_call_tool(self, context, call_next):
+            result = await call_next(context)
+            try:
+                name = getattr(getattr(context, "message", None), "name", None)
+                if name not in want:
+                    return result
+                sc = getattr(result, "structured_content", None)
+                urls = _find_image_urls(sc) if sc else []
+                if not urls:
+                    return result
+                images = []
+                async with httpx.AsyncClient(timeout=30) as client:
+                    for u in urls[:4]:  # cap payload — first few images only
+                        try:
+                            r = await client.get(u)
+                        except Exception:
+                            continue
+                        if r.status_code == 200 and r.content:
+                            mime = (r.headers.get("content-type") or "image/png").split(";")[0]
+                            if not mime.startswith("image/"):
+                                mime = "image/png"
+                            images.append(ImageContent(
+                                type="image",
+                                data=base64.b64encode(r.content).decode(),
+                                mimeType=mime,
+                            ))
+                if not images:
+                    return result
+                existing = list(getattr(result, "content", None) or [])
+                return ToolResult(content=images + existing, structured_content=sc)
+            except Exception:  # pragma: no cover — never break a tool over rendering
+                logger.warning("[mcp-core] inline-image middleware failed", exc_info=True)
+                return result
+
+    fastmcp_server.add_middleware(_ImageResultMiddleware())
+    return len(want)
+
+
 def mount_mcp(
     app: FastAPI,
     *,
@@ -295,6 +387,7 @@ def mount_mcp(
     require_auth: bool = True,
     public_discovery: bool = False,
     anonymous_tools: Optional[Iterable[str]] = None,
+    image_result_tools: Optional[Iterable[str]] = None,
     tool_titles: Optional[Mapping[str, Union[str, Mapping[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     """Mount fastapi-mcp SSE + FastMCP v3 stateless HTTP on `app`.
@@ -377,6 +470,13 @@ def mount_mcp(
                 logger.info("[mcp-core] applied friendly titles to %d tool(s)", n)
             except Exception as e:  # pragma: no cover
                 logger.warning("[mcp-core] tool_titles application failed: %s", e)
+
+        if image_result_tools:
+            try:
+                n = _wrap_image_result_tools(v2, image_result_tools)
+                logger.info("[mcp-core] inline-image rendering wrapped %d tool(s)", n)
+            except Exception as e:  # pragma: no cover
+                logger.warning("[mcp-core] image_result_tools wrap failed: %s", e)
 
         v2_app = v2.http_app(path="/", stateless_http=True)
 
