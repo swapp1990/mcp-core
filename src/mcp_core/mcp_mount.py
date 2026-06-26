@@ -310,6 +310,28 @@ def _wrap_image_result_tools(fastmcp_server: Any, image_tools: Iterable[str]) ->
     if not want:
         return 0
 
+    def _thumbnail(raw: bytes) -> tuple:
+        """Downscale to a chat-friendly preview (full-res stays available via the
+        URL in structured_content). Caps payload so a multi-image result (e.g.
+        template previews) doesn't balloon to multiple MB. Falls back to the
+        original bytes if Pillow is unavailable or anything goes wrong."""
+        try:
+            from io import BytesIO
+            from PIL import Image
+            im = Image.open(BytesIO(raw))
+            im.thumbnail((768, 768))
+            out = BytesIO()
+            if im.mode in ("RGBA", "LA", "P"):
+                rgba = im.convert("RGBA")
+                bg = Image.new("RGB", rgba.size, (255, 255, 255))
+                bg.paste(rgba, mask=rgba.split()[-1])
+                bg.save(out, format="JPEG", quality=85)
+            else:
+                im.convert("RGB").save(out, format="JPEG", quality=85)
+            return out.getvalue(), "image/jpeg"
+        except Exception:
+            return raw, None
+
     _IMG_RE = re.compile(r"https?://[^\s\"'<>]+?\.(?:png|jpg|jpeg|webp|gif)", re.I)
 
     def _find_image_urls(obj: Any) -> list:
@@ -353,12 +375,17 @@ def _wrap_image_result_tools(fastmcp_server: Any, image_tools: Iterable[str]) ->
                         except Exception:
                             continue
                         if r.status_code == 200 and r.content:
-                            mime = (r.headers.get("content-type") or "image/png").split(";")[0]
-                            if not mime.startswith("image/"):
-                                mime = "image/png"
+                            raw = r.content
+                            data, thumb_mime = _thumbnail(raw)
+                            if thumb_mime:
+                                mime = thumb_mime
+                            else:
+                                mime = (r.headers.get("content-type") or "image/png").split(";")[0]
+                                if not mime.startswith("image/"):
+                                    mime = "image/png"
                             images.append(ImageContent(
                                 type="image",
-                                data=base64.b64encode(r.content).decode(),
+                                data=base64.b64encode(data).decode(),
                                 mimeType=mime,
                             ))
                 if not images:
