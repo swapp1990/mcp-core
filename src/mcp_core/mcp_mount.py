@@ -436,9 +436,13 @@ def _install_ui_widget(fastmcp_server: Any, widget: Mapping[str, Any]) -> int:
         connect_domains=list(widget.get("connect_domains") or []) or None,
         frame_domains=list(widget.get("frame_domains") or []) or None,
     )
-    # The resource IS the UI: its app config carries CSP/border only — NOT a
-    # resource_uri (that goes on the TOOLS, below, to point at this widget).
-    app_cfg = AppConfig(csp=csp, prefers_border=True)
+    # The resource IS the UI: its app config carries CSP/border/domain only —
+    # NOT a resource_uri (that goes on the TOOLS, below, to point at this
+    # widget). `domain` is a unique origin identity ChatGPT requires for app
+    # submission.
+    app_cfg = AppConfig(
+        csp=csp, prefers_border=True, domain=widget.get("domain") or None,
+    )
     try:
         fastmcp_server.resource(
             uri, name="designforyou-widget", mime_type=UI_MIME_TYPE, app=app_cfg,
