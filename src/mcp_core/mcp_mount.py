@@ -63,6 +63,9 @@ _PUBLIC_MCP_METHODS = frozenset({
     "prompts/list",
     "resources/list",
     "resources/templates/list",
+    # UI-widget resources (ui://…) are public templates; ChatGPT reads them to
+    # render a tool's component, including for anonymous tools (recommend/browse).
+    "resources/read",
     "completion/complete",
     "logging/setLevel",
 })
@@ -400,6 +403,73 @@ def _wrap_image_result_tools(fastmcp_server: Any, image_tools: Iterable[str]) ->
     return len(want)
 
 
+def _install_ui_widget(fastmcp_server: Any, widget: Mapping[str, Any]) -> int:
+    """Register an MCP Apps UI widget (ChatGPT component) and link it to tools.
+
+    ChatGPT only DISPLAYS images via a UI component (an iframe widget) — raw
+    ImageContent/markdown from tool results are not rendered there. This serves
+    the widget HTML as a ``ui://`` resource (mimetype text/html;profile=mcp-app,
+    with CSP from app config) and attaches ``openai/outputTemplate`` +
+    ``ui.resourceUri`` meta to the named tools so ChatGPT renders the widget with
+    each tool's structuredContent. The widget loads images by URL in-iframe (no
+    base64), so galleries scale. Non-ChatGPT clients ignore the meta and fall
+    back to text/ImageContent.
+
+    widget: {uri, html, tools: set[str], resource_domains/connect_domains/
+    frame_domains: list[str]}. Returns the number of tools linked.
+    """
+    try:
+        from fastmcp.server.server import AppConfig
+        from fastmcp.apps.config import ResourceCSP
+        from fastmcp.utilities.mime import UI_MIME_TYPE
+    except ImportError:
+        return 0
+
+    uri = widget.get("uri")
+    html = widget.get("html")
+    tools = set(widget.get("tools") or ())
+    if not uri or not html:
+        return 0
+
+    csp = ResourceCSP(
+        resource_domains=list(widget.get("resource_domains") or []) or None,
+        connect_domains=list(widget.get("connect_domains") or []) or None,
+        frame_domains=list(widget.get("frame_domains") or []) or None,
+    )
+    # The resource IS the UI: its app config carries CSP/border only — NOT a
+    # resource_uri (that goes on the TOOLS, below, to point at this widget).
+    app_cfg = AppConfig(csp=csp, prefers_border=True)
+    try:
+        fastmcp_server.resource(
+            uri, name="designforyou-widget", mime_type=UI_MIME_TYPE, app=app_cfg,
+        )(lambda: html)
+    except Exception as e:  # pragma: no cover
+        logger.warning("[mcp-core] ui_widget resource registration failed: %s", e)
+        return 0
+
+    try:
+        all_tools = asyncio.run(fastmcp_server._list_tools())
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        try:
+            all_tools = loop.run_until_complete(fastmcp_server._list_tools())
+        finally:
+            loop.close()
+
+    linked = 0
+    for t in all_tools:
+        if t.name not in tools:
+            continue
+        meta = dict(t.meta or {})
+        meta["openai/outputTemplate"] = uri
+        ui = dict(meta.get("ui") or {})
+        ui["resourceUri"] = uri
+        meta["ui"] = ui
+        t.meta = meta
+        linked += 1
+    return linked
+
+
 def mount_mcp(
     app: FastAPI,
     *,
@@ -415,6 +485,7 @@ def mount_mcp(
     public_discovery: bool = False,
     anonymous_tools: Optional[Iterable[str]] = None,
     image_result_tools: Optional[Iterable[str]] = None,
+    ui_widget: Optional[Mapping[str, Any]] = None,
     tool_titles: Optional[Mapping[str, Union[str, Mapping[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     """Mount fastapi-mcp SSE + FastMCP v3 stateless HTTP on `app`.
@@ -504,6 +575,13 @@ def mount_mcp(
                 logger.info("[mcp-core] inline-image rendering wrapped %d tool(s)", n)
             except Exception as e:  # pragma: no cover
                 logger.warning("[mcp-core] image_result_tools wrap failed: %s", e)
+
+        if ui_widget:
+            try:
+                n = _install_ui_widget(v2, ui_widget)
+                logger.info("[mcp-core] UI widget linked to %d tool(s)", n)
+            except Exception as e:  # pragma: no cover
+                logger.warning("[mcp-core] ui_widget install failed: %s", e)
 
         v2_app = v2.http_app(path="/", stateless_http=True)
 

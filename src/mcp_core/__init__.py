@@ -378,6 +378,7 @@ class MCPCore:
         public_discovery: bool = False,
         anonymous_tools: Optional[Iterable[str]] = None,
         image_result_tools: Optional[Iterable[str]] = None,
+        ui_widget: Optional[Dict[str, Any]] = None,
         tool_titles: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Mount MCP transports (legacy SSE + stateless HTTP).
@@ -404,6 +405,7 @@ class MCPCore:
             public_discovery=public_discovery,
             anonymous_tools=anonymous_tools,
             image_result_tools=image_result_tools,
+            ui_widget=ui_widget,
             tool_titles=tool_titles,
         )
 
