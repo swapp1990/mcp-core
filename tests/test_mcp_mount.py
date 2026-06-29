@@ -85,6 +85,48 @@ def test_mcpcore_mount_mcp_method(core: MCPCore, app_with_tagged_routes):
     assert result["v2"] is True
 
 
+def test_ui_widget_installs_chatgpt_compat_metadata():
+    """Apps SDK widgets need OpenAI _meta keys plus an output schema."""
+    import asyncio
+
+    from fastmcp import FastMCP
+    from mcp_core.mcp_mount import _install_ui_widget
+
+    server = FastMCP("widget-test")
+
+    @server.tool(tags={"mcp"})
+    def echo() -> dict:
+        return {"ok": True}
+
+    linked = _install_ui_widget(
+        server,
+        {
+            "uri": "ui://example/widget.html",
+            "html": "<div>Hello</div>",
+            "tools": {"echo"},
+            "resource_domains": ["https://cdn.example.com"],
+            "connect_domains": ["https://api.example.com"],
+            "domain": "https://example.com",
+        },
+    )
+
+    assert linked == 1
+    tools = asyncio.run(server._list_tools())
+    tool = next(t for t in tools if t.name == "echo")
+    assert tool.meta["openai/outputTemplate"] == "ui://example/widget.html"
+    assert tool.meta["openai/widgetAccessible"] is True
+    assert tool.output_schema == {"type": "object", "additionalProperties": True}
+
+    resources = asyncio.run(server._list_resources())
+    resource = next(r for r in resources if str(r.uri) == "ui://example/widget.html")
+    assert resource.meta["openai/widgetCSP"] == {
+        "connect_domains": ["https://api.example.com"],
+        "resource_domains": ["https://cdn.example.com"],
+    }
+    assert resource.meta["openai/widgetDomain"] == "https://example.com"
+    assert resource.meta["openai/widgetPrefersBorder"] is True
+
+
 def test_get_http_headers_patch_is_idempotent(core: MCPCore):
     """Calling mount_mcp twice doesn't double-wrap the patch."""
     from mcp_core import mcp_mount as mm

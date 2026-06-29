@@ -443,9 +443,24 @@ def _install_ui_widget(fastmcp_server: Any, widget: Mapping[str, Any]) -> int:
     app_cfg = AppConfig(
         csp=csp, prefers_border=True, domain=widget.get("domain") or None,
     )
+    resource_meta = {
+        "openai/widgetCSP": {
+            "connect_domains": list(widget.get("connect_domains") or []),
+            "resource_domains": list(widget.get("resource_domains") or []),
+        },
+        "openai/widgetDomain": widget.get("domain") or None,
+        "openai/widgetPrefersBorder": True,
+    }
+    if widget.get("description"):
+        resource_meta["openai/widgetDescription"] = widget.get("description")
+
     try:
         fastmcp_server.resource(
-            uri, name="designforyou-widget", mime_type=UI_MIME_TYPE, app=app_cfg,
+            uri,
+            name="designforyou-widget",
+            mime_type=UI_MIME_TYPE,
+            meta=resource_meta,
+            app=app_cfg,
         )(lambda: html)
     except Exception as e:  # pragma: no cover
         logger.warning("[mcp-core] ui_widget resource registration failed: %s", e)
@@ -466,10 +481,13 @@ def _install_ui_widget(fastmcp_server: Any, widget: Mapping[str, Any]) -> int:
             continue
         meta = dict(t.meta or {})
         meta["openai/outputTemplate"] = uri
+        meta["openai/widgetAccessible"] = True
         ui = dict(meta.get("ui") or {})
         ui["resourceUri"] = uri
         meta["ui"] = ui
         t.meta = meta
+        if not getattr(t, "output_schema", None):
+            t.output_schema = {"type": "object", "additionalProperties": True}
         linked += 1
     return linked
 
