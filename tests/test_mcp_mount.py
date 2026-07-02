@@ -104,6 +104,7 @@ def test_ui_widget_installs_chatgpt_compat_metadata():
             "uri": "ui://example/widget.html",
             "html": "<div>Hello</div>",
             "tools": {"echo"},
+            "aliases": ["ui://example/widget.v1.html", "ui://example/widget.html"],
             "resource_domains": ["https://cdn.example.com"],
             "connect_domains": ["https://api.example.com"],
             "domain": "https://example.com",
@@ -119,6 +120,9 @@ def test_ui_widget_installs_chatgpt_compat_metadata():
 
     resources = asyncio.run(server._list_resources())
     resource = next(r for r in resources if str(r.uri) == "ui://example/widget.html")
+    aliases = {str(r.uri) for r in resources}
+    assert "ui://example/widget.v1.html" in aliases
+    assert len([r for r in resources if str(r.uri) == "ui://example/widget.html"]) == 1
     assert resource.meta["openai/widgetCSP"] == {
         "connect_domains": ["https://api.example.com"],
         "resource_domains": ["https://cdn.example.com"],

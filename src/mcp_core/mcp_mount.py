@@ -415,8 +415,9 @@ def _install_ui_widget(fastmcp_server: Any, widget: Mapping[str, Any]) -> int:
     base64), so galleries scale. Non-ChatGPT clients ignore the meta and fall
     back to text/ImageContent.
 
-    widget: {uri, html, tools: set[str], resource_domains/connect_domains/
-    frame_domains: list[str]}. Returns the number of tools linked.
+    widget: {uri, html, tools: set[str], aliases: list[str],
+    resource_domains/connect_domains/frame_domains: list[str]}. Returns the
+    number of tools linked to the canonical URI.
     """
     try:
         from fastmcp.server.server import AppConfig
@@ -454,17 +455,27 @@ def _install_ui_widget(fastmcp_server: Any, widget: Mapping[str, Any]) -> int:
     if widget.get("description"):
         resource_meta["openai/widgetDescription"] = widget.get("description")
 
-    try:
-        fastmcp_server.resource(
-            uri,
-            name="designforyou-widget",
-            mime_type=UI_MIME_TYPE,
-            meta=resource_meta,
-            app=app_cfg,
-        )(lambda: html)
-    except Exception as e:  # pragma: no cover
-        logger.warning("[mcp-core] ui_widget resource registration failed: %s", e)
-        return 0
+    resource_uris = [uri]
+    for alias in widget.get("aliases") or ():
+        if alias and alias not in resource_uris:
+            resource_uris.append(alias)
+
+    for idx, resource_uri in enumerate(resource_uris):
+        def _read_widget_html() -> str:
+            return html
+
+        try:
+            fastmcp_server.resource(
+                resource_uri,
+                name="designforyou-widget" if idx == 0 else f"designforyou-widget-alias-{idx}",
+                mime_type=UI_MIME_TYPE,
+                meta=resource_meta,
+                app=app_cfg,
+            )(_read_widget_html)
+        except Exception as e:  # pragma: no cover
+            logger.warning("[mcp-core] ui_widget resource registration failed: %s", e)
+            if idx == 0:
+                return 0
 
     try:
         all_tools = asyncio.run(fastmcp_server._list_tools())
