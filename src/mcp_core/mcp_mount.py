@@ -23,7 +23,9 @@ What it does, in order:
      `from fastmcp.server.dependencies import get_http_headers` at import.
      Without this, FastMCP's OpenAPI runner strips `authorization` before
      forwarding into the ASGI transport, so every authed call 401s through
-     mcp-core's auth_and_bill. The patch is idempotent.
+     mcp-core's auth_and_bill. We also preserve `x-mcp-transport`, a marker
+     stamped by the v2 gate so downstream product logs can distinguish MCP
+     transport calls from first-party REST calls. The patch is idempotent.
   2. fastapi-mcp SSE mount at `mount_path_legacy` (default `/mcp`). Kept for
      backward compat with clients pinned to `type: sse`. Skipped if
      fastapi-mcp isn't installed or `legacy_sse=False`.
@@ -77,7 +79,7 @@ _FASTMCP_HEADERS_PATCHED = False
 
 
 def _patch_fastmcp_get_http_headers() -> bool:
-    """Make fastmcp's OpenAPI provider forward `authorization` headers.
+    """Make fastmcp's OpenAPI provider forward MCP-critical headers.
 
     Returns True if the patch was applied (or already applied), False if
     fastmcp isn't installed.
@@ -94,7 +96,7 @@ def _patch_fastmcp_get_http_headers() -> bool:
     _orig = _deps.get_http_headers
 
     def _with_auth(include_all: bool = False, include=None):
-        inc = set(include or set()) | {"authorization"}
+        inc = set(include or set()) | {"authorization", "x-mcp-transport"}
         return _orig(include_all=include_all, include=inc)
 
     _deps.get_http_headers = _with_auth
@@ -141,6 +143,14 @@ def _install_bearer_gate(
     """
     prefix = mount_path_v2.rstrip("/")
     anon_tools = set(anonymous_tools or ())
+
+    def _stamp_mcp_transport(request) -> None:
+        """Mark downstream route calls as coming from the MCP transport."""
+        marker = (b"x-mcp-transport", b"1")
+        headers = list(request.scope.get("headers") or [])
+        if not any(k.lower() == marker[0] for k, _ in headers):
+            headers.append(marker)
+            request.scope["headers"] = headers
 
     def _challenge(request, description: str):
         base = str(request.base_url).rstrip("/")
@@ -199,6 +209,7 @@ def _install_bearer_gate(
         path = request.url.path
         if not (path == prefix or path.startswith(prefix + "/")):
             return await call_next(request)
+        _stamp_mcp_transport(request)
 
         # Strict mode: original behavior — any request needs a valid token.
         if not public_discovery:
