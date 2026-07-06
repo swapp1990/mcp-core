@@ -40,6 +40,7 @@ without raising.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 from typing import Any, Dict, Iterable, Mapping, Optional, Union
@@ -520,6 +521,8 @@ def mount_mcp(
     image_result_tools: Optional[Iterable[str]] = None,
     ui_widget: Optional[Mapping[str, Any]] = None,
     tool_titles: Optional[Mapping[str, Union[str, Mapping[str, Any]]]] = None,
+    allowed_hosts: Optional[Iterable[str]] = None,
+    allowed_origins: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     """Mount fastapi-mcp SSE + FastMCP v3 stateless HTTP on `app`.
 
@@ -616,7 +619,13 @@ def mount_mcp(
             except Exception as e:  # pragma: no cover
                 logger.warning("[mcp-core] ui_widget install failed: %s", e)
 
-        v2_app = v2.http_app(path="/", stateless_http=True)
+        http_app_kwargs: Dict[str, Any] = {"path": "/", "stateless_http": True}
+        http_app_params = inspect.signature(v2.http_app).parameters
+        if "allowed_hosts" in http_app_params and allowed_hosts is not None:
+            http_app_kwargs["allowed_hosts"] = list(allowed_hosts)
+        if "allowed_origins" in http_app_params and allowed_origins is not None:
+            http_app_kwargs["allowed_origins"] = list(allowed_origins)
+        v2_app = v2.http_app(**http_app_kwargs)
 
         # Compose lifespans: FastMCP's session manager needs its lifespan
         # to run, and we must keep the app's existing lifespan (DB connect,
