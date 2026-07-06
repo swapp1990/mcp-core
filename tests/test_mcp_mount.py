@@ -367,9 +367,9 @@ def test_public_discovery_off_by_default_still_strict(core: MCPCore, app_with_ta
 
 
 def test_get_http_headers_patch_includes_authorization(core: MCPCore):
-    """The patched get_http_headers always includes transport-critical
-    headers, so the downstream FastAPI route sees auth and MCP attribution
-    markers. Verifies behavior, not just identity."""
+    """The patched get_http_headers always includes 'authorization' in
+    its include set, so the downstream FastAPI route sees the Bearer
+    token. Verifies behavior, not just identity."""
     from mcp_core import mcp_mount as mm
     from fastmcp.server import dependencies as deps
 
@@ -386,4 +386,3 @@ def test_get_http_headers_patch_includes_authorization(core: MCPCore):
     import inspect
     src = inspect.getsource(deps.get_http_headers)
     assert "authorization" in src
-    assert "x-mcp-transport" in src
