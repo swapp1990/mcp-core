@@ -146,6 +146,20 @@ behavior for Logto and Supabase. For Supabase, it also verifies that the
 authorize endpoint redirects back to your app's consent UI with an
 `authorization_id`.
 
+### Client auth matrix (operators / products)
+
+Server readiness is not enough for release confidence. Use the **client auth
+matrix** to verify real MCP clients (Claude Code, OpenCode, Grok, Cursor, …):
+
+- [docs/client-auth-matrix.md](docs/client-auth-matrix.md) — OAuth primary vs
+  optional PAT fallback; operator checklist; anti-patterns  
+- [docs/templates/connect.md.template](docs/templates/connect.md.template) —
+  plain-text connect guide products can serve at
+  `/.well-known/mcp/connect.md`
+
+Product-specific eval harnesses (isolated CLI profiles, Windows runners, etc.)
+belong in the **product repo**, not in mcp-core.
+
 ## Testing
 
 ```bash

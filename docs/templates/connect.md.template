@@ -1,0 +1,166 @@
+# {{PRODUCT_NAME}} MCP — connect guide
+
+> **Product owners:** copy this file, replace `{{…}}` placeholders, and serve it
+> as plain text (no JS) at e.g. `GET /.well-known/mcp/connect.md` and/or
+> `/connect.md`. Keep it in sync with your public MCP URL and auth options.
+>
+> **mcp-core** provides OAuth metadata and bearer validation; this guide is the
+> human/agent-facing recipe.
+
+This file is the machine-readable setup guide.
+Human UI: {{PRODUCT_CONNECT_UI_URL}}
+Discovery: {{PUBLIC_ORIGIN}}/.well-known/mcp/server.json
+
+## Server
+
+| Field | Value |
+|-------|--------|
+| URL | `{{MCP_URL}}` |
+| Transport | Streamable HTTP (remote MCP) |
+| Trailing slash | {{TRAILING_SLASH_NOTE}} |
+| OAuth scopes | {{OAUTH_SCOPES}} |
+| Server name | `{{MCP_SERVER_NAME}}` (recommended in client configs) |
+
+## Auth (pick one)
+
+There is **no** free anonymous MCP access. Every successful tool call is
+authenticated as a product user.
+
+### A) OAuth (browser sign-in) — primary path
+
+**This is the normal flow.** You sign in once in a browser; the **MCP client**
+stores tokens. You do **not** generate a PAT on the website for this path.
+
+1. Add the MCP server URL (recipes below).
+2. When the client prompts, complete the **web login** ({{IDP_SIGNIN_METHODS}}).
+3. The client stores OAuth access/refresh tokens. Later calls are silent until
+   reauthorization is required.
+
+If the client shows the server as **disabled / not connected / auth required**
+after add, OAuth did not finish. Use option B only as a fallback.
+
+### B) Long-lived bearer token — optional fallback
+
+**Only if your product implements PAT minting.** Skip this section if you only
+support OAuth.
+
+1. Sign in at {{PRODUCT_ORIGIN}}
+2. Open {{PRODUCT_CONNECT_UI_URL}}
+3. Generate a token (shown once). Store as env var `{{PAT_ENV_VAR}}`.
+4. Configure the client to send `Authorization: Bearer <token>`.
+5. Revoke the token on the same page if it leaks.
+
+Minting **requires** a signed-in website session. Agents cannot mint a token by
+calling MCP while unauthenticated. Do **not** paste browser localStorage tokens.
+Do **not** use admin or service tokens.
+
+## Client recipes
+
+### Claude Code
+
+**OAuth:**
+
+```bash
+claude mcp add --transport http {{MCP_SERVER_NAME}} {{MCP_URL}}
+claude mcp login {{MCP_SERVER_NAME}}
+```
+
+**Bearer (after minting `{{PAT_ENV_VAR}}`):**
+
+```bash
+claude mcp add --transport http {{MCP_SERVER_NAME}} {{MCP_URL}} \
+  --header "Authorization: Bearer ${{PAT_ENV_VAR}}"
+```
+
+### OpenCode
+
+**OAuth:** add a remote MCP entry for `{{MCP_URL}}`, then:
+
+```bash
+opencode mcp auth {{MCP_SERVER_NAME}}
+opencode mcp list
+```
+
+**Bearer (fallback):**
+
+```bash
+opencode mcp add {{MCP_SERVER_NAME}} --url {{MCP_URL}} \
+  --header "Authorization=Bearer ${{PAT_ENV_VAR}}"
+```
+
+### Grok (xAI)
+
+**OAuth (interactive):**
+
+```bash
+grok mcp add --transport http {{MCP_SERVER_NAME}} {{MCP_URL}}
+```
+
+Then in the TUI: `/mcps` → select server → press `i` to authorize → browser
+sign-in → press `r` to refresh.
+
+**Bearer (fallback):**
+
+```bash
+grok mcp add --transport http {{MCP_SERVER_NAME}} {{MCP_URL}} \
+  --header "Authorization: Bearer ${{PAT_ENV_VAR}}"
+grok mcp doctor {{MCP_SERVER_NAME}}
+```
+
+### Codex
+
+Often bearer-first (if your product supports PAT):
+
+```powershell
+[Environment]::SetEnvironmentVariable("{{PAT_ENV_VAR}}", "<paste-token-here>", "User")
+codex mcp add {{MCP_SERVER_NAME}} --url {{MCP_URL}} --bearer-token-env-var {{PAT_ENV_VAR}}
+```
+
+### Cursor
+
+Add via deeplink or `.cursor/mcp.json` with `url: "{{MCP_URL}}"`, then complete
+OAuth when prompted.
+
+## Agent checklist (curl)
+
+```bash
+curl -s {{PUBLIC_ORIGIN}}/.well-known/mcp/server.json
+curl -s {{PUBLIC_ORIGIN}}/.well-known/mcp/connect.md
+curl -s {{PUBLIC_ORIGIN}}/.well-known/oauth-protected-resource
+
+# Unauth control (expect 401)
+curl -s -D - -X POST "{{MCP_URL}}" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"smoke","version":"1.0"}}}'
+
+# Optional: initialize with PAT
+curl -s -X POST "{{MCP_URL}}" \
+  -H "Authorization: Bearer ${{PAT_ENV_VAR}}" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"smoke","version":"1.0"}}}'
+```
+
+## After connect
+
+- Prefer free read-only probes first (e.g. credits / list / health).  
+- Surface product URLs from tool responses to the user.  
+- Full UI: {{PRODUCT_CONNECT_UI_URL}}
+
+---
+
+## Placeholder reference
+
+| Placeholder | Example |
+|-------------|---------|
+| `{{PRODUCT_NAME}}` | WriteForYou |
+| `{{PUBLIC_ORIGIN}}` | `https://writer.example.com` |
+| `{{MCP_URL}}` | `https://writer.example.com/mcp/v2/` |
+| `{{MCP_SERVER_NAME}}` | `writeforyou` |
+| `{{PRODUCT_CONNECT_UI_URL}}` | `https://writer.example.com/connect` |
+| `{{PRODUCT_ORIGIN}}` | same as public origin |
+| `{{OAUTH_SCOPES}}` | `openid profile email` |
+| `{{IDP_SIGNIN_METHODS}}` | Google or email/password via Supabase |
+| `{{PAT_ENV_VAR}}` | `WRITEFORYOU_MCP_TOKEN` |
+| `{{TRAILING_SLASH_NOTE}}` | Required / Not required |

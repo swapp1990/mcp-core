@@ -2,6 +2,10 @@
 
 Step-by-step guide for building a new MCP-first server using mcp-core. Covers project setup, tool registration, auth/billing wiring, testing, and deployment.
 
+After the server is live, verify **real MCP clients** with the
+[client auth matrix](./client-auth-matrix.md) and publish a plain-text
+[connect guide](./templates/connect.md.template) for humans and agents.
+
 ## 1. Project Setup
 
 ### Directory Layout
