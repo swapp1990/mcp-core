@@ -31,13 +31,13 @@ my-mcp-server/
 
 ```bash
 cd backend
-pip install mcp-core fastapi-mcp uvicorn
+pip install mcp-core-auth fastapi-mcp uvicorn
 ```
 
 Or in `requirements.txt`:
 
 ```
-mcp-core>=0.1.0
+mcp-core-auth>=0.3.8
 fastapi-mcp>=0.3.0
 uvicorn>=0.29.0
 ```
@@ -359,7 +359,7 @@ For every new tool:
 ### Test Setup
 
 ```bash
-pip install mcp-core[dev] pytest pytest-asyncio httpx
+pip install mcp-core-auth[dev] pytest pytest-asyncio httpx
 ```
 
 Create `tests/conftest.py`:
