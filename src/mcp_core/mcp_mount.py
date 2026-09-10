@@ -252,16 +252,28 @@ def _apply_tool_titles(
     except ImportError:
         return 0
 
+    import threading
+
+    box: dict = {}
+
+    def _runner():
+        try:
+            box["tools"] = asyncio.run(fastmcp_server._list_tools())
+        except Exception as exc:  # pragma: no cover
+            box["error"] = exc
+
     try:
         tools = asyncio.run(fastmcp_server._list_tools())
     except RuntimeError:
-        # Already inside a running loop (unlikely at module load, but
-        # be defensive). Schedule and wait via a fresh loop.
-        loop = asyncio.new_event_loop()
-        try:
-            tools = loop.run_until_complete(fastmcp_server._list_tools())
-        finally:
-            loop.close()
+        # Already inside a running loop (uvicorn). Drive listing from a
+        # dedicated thread that owns its own loop.
+        th = threading.Thread(target=_runner)
+        th.start()
+        th.join()
+        if "error" in box:
+            logger.warning("tool_titles listing failed under running loop: %s", box["error"])
+            return 0
+        tools = box.get("tools") or []
 
     by_name = {t.name: t for t in tools}
     updated = 0
