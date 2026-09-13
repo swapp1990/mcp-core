@@ -17,9 +17,10 @@ from mcp_core.dcr import LogtoDCR
 
 # ── Transport fakes ────────────────────────────────────────
 
-def _make_transport(token_response=None, app_response=None, app_status=201):
-    """Build an httpx MockTransport that answers token + create-app calls."""
+def _make_transport(token_response=None, app_response=None, app_status=201, existing_apps=None):
+    """Build an httpx MockTransport that answers token + application calls."""
     calls = []
+    listed = list(existing_apps or [])
 
     def _handler(request: httpx.Request) -> httpx.Response:
         calls.append({
@@ -28,7 +29,8 @@ def _make_transport(token_response=None, app_response=None, app_status=201):
             "headers": dict(request.headers),
             "content": request.content.decode() if request.content else "",
         })
-        if request.url.path.endswith("/oidc/token"):
+        path = request.url.path
+        if path.endswith("/oidc/token"):
             body = token_response or {
                 "access_token": "mgmt-token-abc",
                 "expires_in": 3600,
@@ -36,7 +38,19 @@ def _make_transport(token_response=None, app_response=None, app_status=201):
                 "scope": "all",
             }
             return httpx.Response(200, json=body)
-        if request.url.path.endswith("/api/applications"):
+        if request.method == "GET" and path.endswith("/api/applications"):
+            return httpx.Response(200, json=listed)
+        if request.method == "PATCH" and "/api/applications/" in path:
+            payload = json.loads(request.content.decode() or "{}")
+            app_id = path.rsplit("/", 1)[-1]
+            updated = {
+                "id": app_id,
+                "name": "mcp-dcr: Claude Code",
+                "type": "Native",
+                "oidcClientMetadata": payload.get("oidcClientMetadata") or {},
+            }
+            return httpx.Response(200, json=updated)
+        if request.method == "POST" and path.endswith("/api/applications"):
             body = app_response or {
                 "id": "new-app-client-id",
                 "secret": "new-app-secret",
@@ -81,7 +95,10 @@ async def test_register_creates_native_app_for_public_client():
     assert "client_secret" not in result  # Native = public, no secret returned
 
     # Management API was called with the incoming redirect_uri baked in
-    create_call = next(c for c in calls if "/api/applications" in c["url"])
+    create_call = next(
+        c for c in calls
+        if c["method"] == "POST" and c["url"].rstrip("/").endswith("/api/applications")
+    )
     body = json.loads(create_call["content"])
     assert body["type"] == "Native"
     assert body["oidcClientMetadata"]["redirectUris"] == ["http://localhost:39879/callback"]
@@ -102,7 +119,10 @@ async def test_register_creates_traditional_app_for_confidential_client():
     assert result["client_id"] == "trad-app"
     assert result["client_secret"] == "trad-secret"
     assert result["client_secret_expires_at"] == 0
-    create_call = next(c for c in calls if "/api/applications" in c["url"])
+    create_call = next(
+        c for c in calls
+        if c["method"] == "POST" and c["url"].rstrip("/").endswith("/api/applications")
+    )
     assert json.loads(create_call["content"])["type"] == "Traditional"
 
 
@@ -143,7 +163,9 @@ async def test_mgmt_token_refetched_on_401():
     def _handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/oidc/token"):
             return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
-        if request.url.path.endswith("/api/applications"):
+        if request.method == "GET" and request.url.path.endswith("/api/applications"):
+            return httpx.Response(200, json=[])
+        if request.method == "POST" and request.url.path.endswith("/api/applications"):
             return next(app_responses)
         return httpx.Response(404)
 
@@ -188,3 +210,74 @@ async def test_mgmt_token_expiry_refetches():
 
     token_calls = [c for c in calls if "/oidc/token" in c["url"]]
     assert len(token_calls) == 2
+
+
+async def test_register_reuses_existing_native_app_and_replaces_loopback():
+    existing = [{
+        "id": "stable-native",
+        "name": "mcp-dcr: Claude Code",
+        "type": "Native",
+        "oidcClientMetadata": {
+            "redirectUris": ["http://localhost:1111/callback"],
+            "postLogoutRedirectUris": [],
+        },
+    }]
+    transport, calls = _make_transport(existing_apps=existing)
+    dcr = _dcr_with(transport)
+
+    result = await dcr.register({
+        "redirect_uris": ["http://localhost:2222/callback"],
+        "client_name": "Claude Code",
+        "token_endpoint_auth_method": "none",
+    })
+
+    assert result["client_id"] == "stable-native"
+    assert result["redirect_uris"] == ["http://localhost:2222/callback"]
+    assert not any(c["method"] == "POST" and c["url"].rstrip("/").endswith("/api/applications") for c in calls)
+    patch = next(c for c in calls if c["method"] == "PATCH")
+    assert json.loads(patch["content"])["oidcClientMetadata"]["redirectUris"] == [
+        "http://localhost:2222/callback"
+    ]
+
+
+async def test_register_keeps_non_loopback_uris_when_reusing():
+    existing = [{
+        "id": "stable-native",
+        "name": "mcp-dcr: Claude Code",
+        "type": "Native",
+        "oidcClientMetadata": {
+            "redirectUris": ["https://cursor.example/cb", "http://localhost:1111/callback"],
+        },
+    }]
+    transport, _calls = _make_transport(existing_apps=existing)
+    dcr = _dcr_with(transport)
+
+    result = await dcr.register({
+        "redirect_uris": ["http://127.0.0.1:3333/callback"],
+        "client_name": "Claude Code",
+        "token_endpoint_auth_method": "none",
+    })
+    assert result["redirect_uris"] == [
+        "https://cursor.example/cb",
+        "http://127.0.0.1:3333/callback",
+    ]
+
+
+async def test_register_does_not_reuse_traditional_apps():
+    existing = [{
+        "id": "old-trad",
+        "name": "mcp-dcr: MCP Client",
+        "type": "Traditional",
+        "secret": "old-secret",
+    }]
+    transport, calls = _make_transport(
+        existing_apps=existing,
+        app_response={"id": "new-trad", "secret": "new-secret", "name": "mcp-dcr: MCP Client", "type": "Traditional"},
+    )
+    dcr = _dcr_with(transport)
+    result = await dcr.register({
+        "redirect_uris": ["https://app.example.com/cb"],
+        "token_endpoint_auth_method": "client_secret_basic",
+    })
+    assert result["client_id"] == "new-trad"
+    assert any(c["method"] == "POST" and c["url"].rstrip("/").endswith("/api/applications") for c in calls)
