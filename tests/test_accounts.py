@@ -111,3 +111,31 @@ async def test_delete_logto_user_calls_the_management_api():
 async def test_delete_logto_user_needs_management_credentials():
     with pytest.raises(RuntimeError):
         await delete_logto_user(None, "u1")
+
+
+@pytest.mark.asyncio
+async def test_signing_key_comes_from_the_documented_env_var(mock_db, monkeypatch):
+    monkeypatch.setenv("LOGTO_WEBHOOK_SIGNING_KEY", KEY)
+    core = MCPCore(product_name="videogen", dev_auth_bypass=True)
+    core.db = mock_db
+    app = FastAPI()
+    core.install_account_deletion_webhook(app)
+    await mock_db["users"].insert_one({"auth_user_id": "logto:u1"})
+
+    body, headers = _signed({"event": "User.Deleted", "params": {"userId": "u1"}, "data": None})
+    r = TestClient(app).post("/api/logto/webhook", content=body, headers=headers)
+
+    assert r.status_code == 200
+    assert await mock_db["users"].count_documents({}) == 0
+
+
+def test_without_a_signing_key_the_route_rejects_every_call(mock_db, monkeypatch):
+    monkeypatch.delenv("LOGTO_WEBHOOK_SIGNING_KEY", raising=False)
+    monkeypatch.delenv("MCP_CORE_LOGTO_WEBHOOK_SIGNING_KEY", raising=False)
+    core = MCPCore(product_name="videogen", dev_auth_bypass=True)
+    core.db = mock_db
+    app = FastAPI()
+    core.install_account_deletion_webhook(app)
+
+    body, headers = _signed({"event": "User.Deleted", "data": {"id": "u1"}})
+    assert TestClient(app).post("/api/logto/webhook", content=body, headers=headers).status_code == 401
