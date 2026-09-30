@@ -1,0 +1,18 @@
+{
+  "name": "@swapp1990/auth-web",
+  "version": "0.1.0",
+  "description": "Shared Logto sign-in for swapp1990 web apps, with the platform defaults baked in.",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": { "types": "./src/index.d.ts", "default": "./src/index.js" },
+    "./react": { "types": "./src/react.d.ts", "default": "./src/react.js" }
+  },
+  "files": ["src"],
+  "scripts": { "test": "node --test" },
+  "peerDependencies": { "@logto/browser": "^3.0.0", "react": ">=18" },
+  "peerDependenciesMeta": { "react": { "optional": true } },
+  "devDependencies": { "@logto/browser": "3.0.14" },
+  "license": "MIT"
+}
