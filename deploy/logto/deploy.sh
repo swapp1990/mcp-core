@@ -31,6 +31,12 @@ cd "$(dirname "$0")"
 
 echo "==> Syncing compose files to $SERVER:$REMOTE_DIR"
 ssh -i "$SSH_KEY" "$SERVER" "mkdir -p $REMOTE_DIR"
+# A server may carry its own prod override (connector mounts, fixed ENDPOINT); never overwrite a different one silently.
+if [ "${LOGTO_FORCE_COMPOSE:-0}" != "1" ] && ssh -i "$SSH_KEY" "$SERVER" "test -f $REMOTE_DIR/docker-compose.prod.yml" \
+    && ! ssh -i "$SSH_KEY" "$SERVER" "cat $REMOTE_DIR/docker-compose.prod.yml" | cmp -s - docker-compose.prod.yml; then
+  echo "FAIL: $REMOTE_DIR/docker-compose.prod.yml differs from this repo's copy; set LOGTO_FORCE_COMPOSE=1 to replace it" >&2
+  exit 1
+fi
 scp -i "$SSH_KEY" \
     docker-compose.yml \
     docker-compose.prod.yml \

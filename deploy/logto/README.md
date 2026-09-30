@@ -17,7 +17,7 @@ differ between `docker-compose.local.yml` and `docker-compose.prod.yml`.
 | `bootstrap-apps.example.json` | Schema for product definitions consumed by `bootstrap-apps.py`. |
 | `bootstrap-apps.py` | Idempotent CLI that creates SPA + API resource + DCR M2M apps from a config. |
 | `verify.py` | End-to-end compatibility check: mcp-core talking to self-host. |
-| `deploy.sh` | One-shot prod deploy script (rsync compose files + `up -d`). |
+| `deploy.sh` | One-shot prod deploy script (rsync compose files + `up -d`). Refuses to replace a server's differing `docker-compose.prod.yml` unless `LOGTO_FORCE_COMPOSE=1`. |
 | `sign-in-experience.json` | Desired sign-in experience fields (methods, social buttons, account linking, custom CSS). Source of truth; edit here, not in the console. |
 | `logto_config.py` | `snapshot` writes the live apps, resources, connectors and sign-in experience to `logto-state.json` (gitignored, no secrets); `apply` diffs `sign-in-experience.json` against the tenant and patches it with `--yes`. |
 
@@ -46,6 +46,9 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml down -v
 ```
 
 ## Production deploy
+
+The Logto image is pinned (`svhd/logto:1.38.0` by default). Set `LOGTO_IMAGE` in the server's `.env`
+(tag plus digest, e.g. `svhd/logto:1.38.0@sha256:…`) and change it deliberately to upgrade.
 
 First-time server prep (once):
 

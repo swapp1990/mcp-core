@@ -7,8 +7,13 @@ Shared auth, billing, logging, and MCP-mount layer for WriteForYou and DesignFor
 
 ## Who consumes it
 
-- **WriteForYou** pins `mcp-core-auth==0.3.8` in `D:/MyProjects/Claude/autonomous-writer/writer-v2/server/requirements.txt`.
-- **DesignForYou** (Python backend at `D:/MyProjects/Claude/ai-template-gen/backend`) pins a git SHA `@14880fe`.
+Every product follows [docs/platform-contract.md](docs/platform-contract.md) and pins a released `mcp-core-auth` version:
+
+- **WriteForYou**: `D:/MyProjects/Claude/writeforyou/tracks/writer-api/services/api/requirements.txt`
+- **DesignForYou**: `D:/MyProjects/Claude/ai-template-gen/backend/requirements.txt`
+- **VideoGen**: `D:/MyProjects/Claude/directforyou/tracks/videogen/backend/requirements.txt`
+- **LetMeActForYou**: `D:/MyProjects/Claude/directforyou/tracks/actforyou/requirements.txt`
+- **VN Creator**: `D:/MyProjects/Claude/vn-creator/backend/requirements.txt` (still on 0.3.1; repinned when it moves to the shared Logto)
 
 ## Rename trap
 
@@ -33,4 +38,4 @@ py -3 -m pytest tests -q
 1. Bump `pyproject.toml` version.
 2. Tag `vX.Y.Z` on that same commit.
 3. Publish the `mcp-core-auth` wheel to PyPI.
-4. Repin **both** products (WriteForYou version pin and DesignForYou pin) and deploy.
+4. Repin **every** product above and deploy each one.

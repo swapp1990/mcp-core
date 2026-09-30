@@ -1,7 +1,9 @@
-# mcp-core 0.4.0 proposal (unreleased)
+# mcp-core 0.4.0
 
-Status: **proposed, not published.** WriteForYou still pins `mcp-core-auth==0.3.8`.
-Do not bump DesignForYou or cut a PyPI release until both consumers agree.
+Status: **released 2026-09-29.** 0.4.0 ships the PAT store and loop-safe tool
+titles below, plus fail-closed Logto verification, the one-product-per-database
+check and the [platform contract](./platform-contract.md). The "still to land"
+items now target 0.5.
 
 ## Why
 
@@ -10,15 +12,14 @@ plus a fork of `_apply_tool_titles` because 0.3.8 calls `asyncio.run` under
 uvicorn and silently drops tool titles. Billing/tier plumbing is duplicated
 the same way.
 
-## Shipped in this working tree (not on PyPI)
+## Shipped in 0.4.0
 
 - `mcp_core.tokens.PatStore` / `install_pat_auth` / `pat_router` — product
   supplies `token_prefix`, `env_var`, and `default_name`.
 - `_apply_tool_titles` lists tools from a dedicated thread when already inside
   a running loop (the WriteForYou loop-safe patch).
-- Version string set to `0.4.0` in `pyproject.toml`. **No tag, no publish.**
 
-## Still to land before a real 0.4.0 cut
+## Still to land (0.5)
 
 - PlanCatalog + `require_plan(core, user, "pro")` reading Stripe **and**
   store-billing fields (deletes the `app_store:` fake-Stripe shim).
