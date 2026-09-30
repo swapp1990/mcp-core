@@ -111,3 +111,17 @@ async def test_delete_logto_user_calls_the_management_api():
 async def test_delete_logto_user_needs_management_credentials():
     with pytest.raises(RuntimeError):
         await delete_logto_user(None, "u1")
+
+
+def test_signing_key_comes_from_env_when_not_passed(mock_db, monkeypatch):
+    monkeypatch.setenv("LOGTO_WEBHOOK_SIGNING_KEY", KEY)
+    core = MCPCore(product_name="videogen", dev_auth_bypass=True)
+    core.db = mock_db
+    app = FastAPI()
+    core.install_account_deletion_webhook(app)
+    client = TestClient(app)
+
+    body, headers = _signed({"event": "User.Created", "data": {"id": "u1"}})
+    assert client.post("/api/logto/webhook", content=body, headers=headers).status_code == 200
+    body, headers = _signed({"event": "User.Created", "data": {"id": "u1"}}, key="wrong")
+    assert client.post("/api/logto/webhook", content=body, headers=headers).status_code == 401

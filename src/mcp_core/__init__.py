@@ -342,7 +342,12 @@ class MCPCore:
         path: str = "/api/logto/webhook",
     ) -> None:
         """Route for Logto's User.Deleted hook; ``on_deleted(sub, db)`` removes data beyond ``users``."""
-        key = signing_key or _env("LOGTO_WEBHOOK_SIGNING_KEY")
+        # _env is local to __init__; read the documented name, then the MCP_CORE_ prefix.
+        key = (
+            signing_key
+            or os.getenv("LOGTO_WEBHOOK_SIGNING_KEY", "")
+            or os.getenv("MCP_CORE_LOGTO_WEBHOOK_SIGNING_KEY", "")
+        )
         if not key:
             logger.warning("[mcp-core] LOGTO_WEBHOOK_SIGNING_KEY unset; %s rejects every call", path)
         _accounts.install_account_deletion_webhook(app, lambda: self.db, key, on_deleted, path)
