@@ -85,6 +85,25 @@ def test_mcpcore_mount_mcp_method(core: MCPCore, app_with_tagged_routes):
     assert result["v2"] is True
 
 
+def test_ui_widget_links_tools_inside_a_running_loop():
+    """uvicorn mounts MCP while its loop runs; widget linking must not need a free loop."""
+    import asyncio
+
+    from fastmcp import FastMCP
+    from mcp_core.mcp_mount import _install_ui_widget
+
+    server = FastMCP("widget-loop-test")
+
+    @server.tool(tags={"mcp"})
+    def echo() -> dict:
+        return {"ok": True}
+
+    async def install_while_running():
+        return _install_ui_widget(server, {"uri": "ui://example/widget.html", "html": "<div>Hi</div>", "tools": {"echo"}})
+
+    assert asyncio.run(install_while_running()) == 1
+
+
 def test_ui_widget_installs_chatgpt_compat_metadata():
     """Apps SDK widgets need OpenAI _meta keys plus an output schema."""
     import asyncio

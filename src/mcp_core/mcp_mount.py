@@ -228,6 +228,32 @@ def _install_bearer_gate(
         return await call_next(request)
 
 
+def _list_tools_blocking(fastmcp_server: Any) -> list:
+    """List FastMCP tools from sync code, also when a loop is already running (uvicorn startup)."""
+    try:
+        return list(asyncio.run(fastmcp_server._list_tools()))
+    except RuntimeError:
+        pass
+
+    import threading
+
+    box: dict = {}
+
+    def _runner():
+        try:
+            box["tools"] = asyncio.run(fastmcp_server._list_tools())
+        except Exception as exc:  # pragma: no cover
+            box["error"] = exc
+
+    # asyncio.run and run_until_complete both refuse to nest; a thread gets its own loop.
+    th = threading.Thread(target=_runner)
+    th.start()
+    th.join()
+    if "error" in box:
+        raise box["error"]
+    return list(box.get("tools") or [])
+
+
 def _apply_tool_titles(
     fastmcp_server: Any,
     tool_titles: Mapping[str, Union[str, Mapping[str, Any]]],
@@ -252,28 +278,11 @@ def _apply_tool_titles(
     except ImportError:
         return 0
 
-    import threading
-
-    box: dict = {}
-
-    def _runner():
-        try:
-            box["tools"] = asyncio.run(fastmcp_server._list_tools())
-        except Exception as exc:  # pragma: no cover
-            box["error"] = exc
-
     try:
-        tools = asyncio.run(fastmcp_server._list_tools())
-    except RuntimeError:
-        # Already inside a running loop (uvicorn). Drive listing from a
-        # dedicated thread that owns its own loop.
-        th = threading.Thread(target=_runner)
-        th.start()
-        th.join()
-        if "error" in box:
-            logger.warning("tool_titles listing failed under running loop: %s", box["error"])
-            return 0
-        tools = box.get("tools") or []
+        tools = _list_tools_blocking(fastmcp_server)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("tool_titles listing failed: %s", exc)
+        return 0
 
     by_name = {t.name: t for t in tools}
     updated = 0
@@ -490,14 +499,7 @@ def _install_ui_widget(fastmcp_server: Any, widget: Mapping[str, Any]) -> int:
             if idx == 0:
                 return 0
 
-    try:
-        all_tools = asyncio.run(fastmcp_server._list_tools())
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        try:
-            all_tools = loop.run_until_complete(fastmcp_server._list_tools())
-        finally:
-            loop.close()
+    all_tools = _list_tools_blocking(fastmcp_server)
 
     linked = 0
     for t in all_tools:

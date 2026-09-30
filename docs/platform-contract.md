@@ -34,6 +34,10 @@ Accounts that share a verified email are linked into one Logto user
   product in `_mcp_core_meta` and logs an error when a second product connects.
 - Each product grants its own sign-up credits the first time a person uses it.
 - Stripe customers and RevenueCat entitlements are per product.
+- All products share one Stripe account, so every purchase mcp-core creates carries
+  `product=<product_name>` in its metadata, and a product's webhook ignores events
+  tagged for another product. Credits for a purchase are granted once per Stripe
+  session or payment intent (`users.billing_grant_ids`), so retried events add nothing.
 
 ## Client behavior
 
@@ -52,10 +56,14 @@ instead of hand-writing Logto calls. Product sign-in pickers may call Logto with
 
 ## Account deletion
 
-"Delete account" in any product deletes the shared Logto user. Logto's
-`User.Deleted` webhook fans out to every product backend, and each backend
-removes its own data for that `logto:<sub>`. The UI must say the account is
-removed from every swapp1990 product.
+"Delete account" in any product deletes the shared Logto user
+(`await core.delete_logto_account(sub)`). Logto's `User.Deleted` webhook fans out to
+every product backend, and each backend removes its own data for that `logto:<sub>`:
+`core.install_account_deletion_webhook(app, on_deleted=...)` verifies the
+`logto-signature-sha-256` header with `LOGTO_WEBHOOK_SIGNING_KEY`, deletes the
+product's `users` record and calls `on_deleted(sub, db)` for anything else. Each
+product has its own Logto hook pointing at its `/api/logto/webhook`. The UI must say
+the account is removed from every swapp1990 product.
 
 ## Configuration names
 
@@ -68,6 +76,7 @@ Backends pass these to `MCPCore` explicitly:
 | `LOGTO_APP_ID` | This product's Logto application |
 | `LOGTO_MGMT_APP_ID`, `LOGTO_MGMT_APP_SECRET`, `LOGTO_MGMT_TOKEN_ENDPOINT`, `LOGTO_MGMT_API_RESOURCE` | Management API access (DCR, account deletion) |
 | `DB_NAME` | This product's own database |
+| `LOGTO_WEBHOOK_SIGNING_KEY` | Signing key of this product's Logto `User.Deleted` hook |
 
 ## Adding a new product
 

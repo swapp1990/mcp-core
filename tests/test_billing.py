@@ -806,3 +806,103 @@ async def test_concurrent_deductions(billing, mock_db, mock_stripe):
 
     db_user = await mock_db["users"].find_one({"logto_user_id": "user_1"})
     assert db_user["credits_used"] == 15  # 5 * 3
+
+
+# ── One Stripe account, several products ─────────────────
+
+def _webhook_request(event: dict):
+    import json
+    from starlette.requests import Request
+
+    body = json.dumps(event).encode()
+    scope = {"type": "http", "method": "POST", "path": "/", "headers": [(b"stripe-signature", b"test_sig")]}
+
+    async def receive():
+        return {"type": "http.request", "body": body}
+
+    return Request(scope, receive)
+
+
+def _pack_event(session_id: str = "cs_pack_1", product: str = "") -> dict:
+    metadata = {"kind": "credit_pack", "logto_user_id": "user_1", "credits": "50"}
+    if product:
+        metadata["product"] = product
+    return {
+        "type": "checkout.session.completed",
+        "data": {"object": {"id": session_id, "metadata": metadata, "customer": "cus_1"}},
+    }
+
+
+@pytest.mark.asyncio
+async def test_checkout_metadata_names_the_product(billing, mock_db, mock_stripe):
+    fake_stripe, calls = mock_stripe
+    billing._stripe = fake_stripe
+    billing.product_name = "videogen"
+    user = _make_user()
+    await mock_db["users"].insert_one(user.copy())
+
+    await billing.create_credit_checkout_session(mock_db, user, "pack_50", origin="https://test.app")
+
+    create = [c for c in calls if c[0] == "checkout.Session.create"][-1][1]
+    assert create["metadata"]["product"] == "videogen"
+    assert create["payment_intent_data"]["metadata"]["product"] == "videogen"
+
+
+@pytest.mark.asyncio
+async def test_webhook_ignores_another_products_purchase(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+    billing.product_name = "designforyou"
+    await mock_db["users"].insert_one(_make_user(free_credits=10))
+
+    result = await billing.handle_webhook(_webhook_request(_pack_event(product="videogen")), mock_db, webhook_secret="test")
+
+    assert result["status"] == "ignored"
+    db_user = await mock_db["users"].find_one({"logto_user_id": "user_1"})
+    assert db_user["free_credits"] == 10
+
+
+@pytest.mark.asyncio
+async def test_webhook_grants_its_own_products_purchase(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+    billing.product_name = "videogen"
+    await mock_db["users"].insert_one(_make_user(free_credits=10))
+
+    await billing.handle_webhook(_webhook_request(_pack_event(product="videogen")), mock_db, webhook_secret="test")
+
+    db_user = await mock_db["users"].find_one({"logto_user_id": "user_1"})
+    assert db_user["free_credits"] == 60
+
+
+@pytest.mark.asyncio
+async def test_repeated_pack_event_grants_credits_once(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+    await mock_db["users"].insert_one(_make_user(free_credits=10))
+
+    for _ in range(3):
+        await billing.handle_webhook(_webhook_request(_pack_event("cs_retry")), mock_db, webhook_secret="test")
+    await billing.handle_webhook(_webhook_request(_pack_event("cs_second_purchase")), mock_db, webhook_secret="test")
+
+    db_user = await mock_db["users"].find_one({"logto_user_id": "user_1"})
+    assert db_user["free_credits"] == 110
+    assert db_user["credits_purchased"] == 100
+    assert sorted(db_user["billing_grant_ids"]) == ["checkout:cs_retry", "checkout:cs_second_purchase"]
+
+
+@pytest.mark.asyncio
+async def test_repeated_auto_recharge_event_grants_credits_once(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+    await mock_db["users"].insert_one(_make_user(free_credits=10))
+    event = {
+        "type": "payment_intent.succeeded",
+        "data": {"object": {"id": "pi_auto_1", "metadata": {"kind": "auto_recharge", "logto_user_id": "user_1", "credits": "50"}}},
+    }
+
+    await billing.handle_webhook(_webhook_request(event), mock_db, webhook_secret="test")
+    await billing.handle_webhook(_webhook_request(event), mock_db, webhook_secret="test")
+
+    db_user = await mock_db["users"].find_one({"logto_user_id": "user_1"})
+    assert db_user["free_credits"] == 60

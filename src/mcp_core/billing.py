@@ -108,8 +108,11 @@ class StripeBilling:
         subscription_price_label: str = "",
         subscription_allowed_statuses: Optional[Set[str]] = None,
         portal_configuration_id: str = "",
+        product_name: str = "",
     ):
         self.stripe_secret_key = stripe_secret_key
+        # One Stripe account serves several products; this tags and filters their events.
+        self.product_name = product_name or ""
         self.price_id = price_id
         self.meter_event = meter_event
         self.free_credits = free_credits
@@ -129,6 +132,28 @@ class StripeBilling:
         self.portal_configuration_id = portal_configuration_id or ""
 
         self._stripe: Any = None
+
+    def _metadata(self, user: Dict[str, Any], **extra: Any) -> Dict[str, str]:
+        return _metadata_for_user(user, product=self.product_name or None, **extra)
+
+    async def _grant_credits_once(
+        self,
+        db: Any,
+        metadata: Dict[str, Any],
+        grant_id: str,
+        credits: int,
+        extra_set: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Add purchased credits once per Stripe object; a retried or repeated event changes nothing."""
+        update: Dict[str, Any] = {"$inc": {"free_credits": credits, "credits_purchased": credits}}
+        if extra_set:
+            update["$set"] = extra_set
+        query = _user_filter_from_metadata(metadata)
+        if grant_id:
+            query = {"$and": [query, {"billing_grant_ids": {"$ne": grant_id}}]}
+            update["$addToSet"] = {"billing_grant_ids": grant_id}
+        result = await db["users"].update_one(query, update)
+        return getattr(result, "modified_count", 1) > 0
 
     # ── Lazy Stripe init ──────────────────────────────────
 
@@ -442,7 +467,7 @@ class StripeBilling:
             return f"{base}/billing/success"
 
         try:
-            metadata = _metadata_for_user(user or {}, kind="metered_subscription")
+            metadata = self._metadata(user or {}, kind="metered_subscription")
             if not metadata.get("auth_user_id"):
                 metadata["auth_user_id"] = user_id
             params: Dict[str, Any] = {
@@ -489,7 +514,7 @@ class StripeBilling:
                 logger.info("[billing] Stored Stripe customer missing; creating a new one")
 
         customer = stripe.Customer.create(
-            metadata=_metadata_for_user(user),
+            metadata=self._metadata(user),
             email=user.get("email") or None,
         )
         customer_id = _obj_get(customer, "id")
@@ -610,14 +635,14 @@ class StripeBilling:
             customer=customer_id,
             success_url=f"{base}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{base}/billing",
-            metadata=_metadata_for_user(
+            metadata=self._metadata(
                 user,
                 kind="credit_pack",
                 pack_id=pack["id"],
                 credits=pack["credits"],
             ),
             payment_intent_data={
-                "metadata": _metadata_for_user(
+                "metadata": self._metadata(
                     user,
                     kind="credit_pack",
                     pack_id=pack["id"],
@@ -649,9 +674,9 @@ class StripeBilling:
             customer=customer_id,
             success_url=f"{base}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{base}/billing",
-            metadata=_metadata_for_user(user, kind="metered_subscription"),
+            metadata=self._metadata(user, kind="metered_subscription"),
             subscription_data={
-                "metadata": _metadata_for_user(user, kind="metered_subscription")
+                "metadata": self._metadata(user, kind="metered_subscription")
             },
         )
         return {"url": _obj_get(session, "url"), "session_id": _obj_get(session, "id")}
@@ -665,7 +690,7 @@ class StripeBilling:
             customer=customer_id,
             payment_method_types=["card"],
             usage="off_session",
-            metadata=_metadata_for_user(user, kind="auto_recharge_card"),
+            metadata=self._metadata(user, kind="auto_recharge_card"),
         )
         return {"client_secret": _obj_get(intent, "client_secret")}
 
@@ -804,7 +829,7 @@ class StripeBilling:
                 payment_method=payment_method_id,
                 off_session=True,
                 confirm=True,
-                metadata=_metadata_for_user(
+                metadata=self._metadata(
                     user,
                     kind="auto_recharge",
                     pack_id=pack["id"],
@@ -899,6 +924,10 @@ class StripeBilling:
 
         data = _object_to_dict(data)
 
+        event_product = (data.get("metadata") or {}).get("product", "")
+        if self.product_name and event_product and event_product != self.product_name:
+            return {"status": "ignored", "event": event_type, "reason": f"belongs to {event_product}"}
+
         if event_type == "checkout.session.completed":
             metadata = data.get("metadata", {}) or {}
             kind = metadata.get("kind", "")
@@ -910,18 +939,16 @@ class StripeBilling:
             if kind == "credit_pack":
                 credits = int(metadata.get("credits", "0") or 0)
                 if credits > 0 and (auth_user_id or logto_user_id) and db is not None:
-                    await db["users"].update_one(
-                        _user_filter_from_metadata(metadata),
-                        {
-                            "$inc": {
-                                "free_credits": credits,
-                                "credits_purchased": credits,
-                            },
-                            "$set": {"stripe_customer_id": customer_id} if customer_id else {},
-                        },
+                    granted = await self._grant_credits_once(
+                        db,
+                        metadata,
+                        f"checkout:{data['id']}" if data.get("id") else "",
+                        credits,
+                        {"stripe_customer_id": customer_id} if customer_id else None,
                     )
                     logger.info(
-                        "[billing] +%d credits to user %s (pack)",
+                        "[billing] %s %d credits to user %s (pack)",
+                        "+" if granted else "already granted",
                         credits,
                         auth_user_id or logto_user_id,
                     )
@@ -986,16 +1013,18 @@ class StripeBilling:
             if kind == "auto_recharge":
                 credits = int(metadata.get("credits", "0") or 0)
                 if credits > 0 and user_id and db is not None:
-                    await db["users"].update_one(
-                        _user_filter_from_metadata(metadata),
-                        {
-                            "$inc": {
-                                "free_credits": credits,
-                                "credits_purchased": credits,
-                            }
-                        },
+                    granted = await self._grant_credits_once(
+                        db,
+                        metadata,
+                        f"payment_intent:{data['id']}" if data.get("id") else "",
+                        credits,
                     )
-                    logger.info("[billing] +%d credits via auto-recharge for %s", credits, user_id)
+                    logger.info(
+                        "[billing] %s %d credits via auto-recharge for %s",
+                        "+" if granted else "already granted",
+                        credits,
+                        user_id,
+                    )
             return {"status": "ok", "event": event_type}
 
         elif event_type in SUBSCRIPTION_UPDATE_EVENTS:

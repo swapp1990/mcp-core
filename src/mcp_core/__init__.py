@@ -28,6 +28,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 
 from fastapi import FastAPI, Request
 
+from . import accounts as _accounts
 from .auth import LogtoAuth, SupabaseAuth, user_identity
 from .billing import StripeBilling
 from .dcr import LogtoDCR
@@ -195,6 +196,7 @@ class MCPCore:
                 or _env("STRIPE_PORTAL_CONFIGURATION_ID")
             ),
             credit_packs=credit_packs or [],
+            product_name=self.product_name,
             auto_recharge_cooldown_sec=int(
                 auto_recharge_cooldown_sec
                 or _env("AUTO_RECHARGE_COOLDOWN_SEC", "120")
@@ -325,6 +327,25 @@ class MCPCore:
                 "their users and credits are shared. Give each product its own db_name.",
                 self._db_name, owner_name, self.product_name,
             )
+
+    # ── Shared account ────────────────────────────────────
+
+    async def delete_logto_account(self, sub: str) -> bool:
+        """Delete the person's shared Logto account; every product's deletion webhook then purges its data."""
+        return await _accounts.delete_logto_user(self.dcr, sub)
+
+    def install_account_deletion_webhook(
+        self,
+        app: Any,
+        signing_key: str = "",
+        on_deleted: Any = None,
+        path: str = "/api/logto/webhook",
+    ) -> None:
+        """Route for Logto's User.Deleted hook; ``on_deleted(sub, db)`` removes data beyond ``users``."""
+        key = signing_key or _env("LOGTO_WEBHOOK_SIGNING_KEY")
+        if not key:
+            logger.warning("[mcp-core] LOGTO_WEBHOOK_SIGNING_KEY unset; %s rejects every call", path)
+        _accounts.install_account_deletion_webhook(app, lambda: self.db, key, on_deleted, path)
 
     # ── Main middleware ─────���──────────────────────────────
 

@@ -2,8 +2,9 @@
 
 Status: **released 2026-09-29.** 0.4.0 ships the PAT store and loop-safe tool
 titles below, plus fail-closed Logto verification, the one-product-per-database
-check and the [platform contract](./platform-contract.md). The "still to land"
-items now target 0.5.
+check and the [platform contract](./platform-contract.md). 0.5.0 added product-tagged,
+grant-once Stripe credits and shared-account deletion; the "still to land" items are
+unscheduled.
 
 ## Why
 
@@ -19,7 +20,7 @@ the same way.
 - `_apply_tool_titles` lists tools from a dedicated thread when already inside
   a running loop (the WriteForYou loop-safe patch).
 
-## Still to land (0.5)
+## Still to land
 
 - PlanCatalog + `require_plan(core, user, "pro")` reading Stripe **and**
   store-billing fields (deletes the `app_store:` fake-Stripe shim).
