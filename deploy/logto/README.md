@@ -18,6 +18,8 @@ differ between `docker-compose.local.yml` and `docker-compose.prod.yml`.
 | `bootstrap-apps.py` | Idempotent CLI that creates SPA + API resource + DCR M2M apps from a config. |
 | `verify.py` | End-to-end compatibility check: mcp-core talking to self-host. |
 | `deploy.sh` | One-shot prod deploy script (rsync compose files + `up -d`). |
+| `sign-in-experience.json` | Desired sign-in experience fields (methods, social buttons, account linking, custom CSS). Source of truth; edit here, not in the console. |
+| `logto_config.py` | `snapshot` writes the live apps, resources, connectors and sign-in experience to `logto-state.json` (gitignored, no secrets); `apply` diffs `sign-in-experience.json` against the tenant and patches it with `--yes`. |
 
 ## Local dev
 
@@ -209,7 +211,8 @@ Either run `bootstrap-apps.py` (above) or do these once the stack is up:
 4. **Google social connector** — create a Google Cloud OAuth 2.0 client,
    redirect URI `https://auth.example.com/callback/<connector-id>`.
 5. **SMTP / SES email connector** — see `provision-ses.sh` for AWS SES.
-6. **Sign-in experience** — enable email + password, plus any social connectors.
+6. **Sign-in experience** — apply `sign-in-experience.json` with
+   `py logto_config.py apply --env-file <backend .env.prod> --yes`.
 
 Then update each product's frontend + backend `.env`:
 - Frontend: `LOGTO_CONFIG.endpoint = 'https://auth.example.com'`

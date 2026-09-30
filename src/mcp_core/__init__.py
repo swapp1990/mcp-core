@@ -298,7 +298,33 @@ class MCPCore:
         client = motor.motor_asyncio.AsyncIOMotorClient(self._mongodb_uri)
         self.db = client[self._db_name]
         logger.info("[mcp-core] Connected to MongoDB: %s", self._db_name)
+        await self._claim_database()
         return self.db
+
+    async def _claim_database(self) -> None:
+        """Warn when another product already owns this database.
+
+        Credits live as flat fields on ``users``, so two products sharing a
+        database share one balance per person.
+        """
+        try:
+            meta = self.db["_mcp_core_meta"]
+            await meta.update_one(
+                {"_id": "owner"},
+                {"$setOnInsert": {"product_name": self.product_name}},
+                upsert=True,
+            )
+            owner = await meta.find_one({"_id": "owner"})
+        except Exception as exc:
+            logger.warning("[mcp-core] Could not check database owner: %s", exc)
+            return
+        owner_name = (owner or {}).get("product_name")
+        if owner_name and owner_name != self.product_name:
+            logger.error(
+                "[mcp-core] Database %r belongs to product %r, not %r; "
+                "their users and credits are shared. Give each product its own db_name.",
+                self._db_name, owner_name, self.product_name,
+            )
 
     # ── Main middleware ─────���──────────────────────────────
 

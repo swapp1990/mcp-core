@@ -11,6 +11,7 @@ venv/
 .env.live
 tests/.env.live
 deploy/logto/bootstrap-apps.json
+deploy/logto/logto-state.json
 .pytest_cache/
 htmlcov/
 .coverage

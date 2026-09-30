@@ -116,6 +116,35 @@ async def test_dev_bypass_returns_dev_user(auth):
 
 
 @pytest.mark.asyncio
+async def test_unconfigured_logto_rejects_tokens_without_dev_bypass():
+    from mcp_core.auth import LogtoAuth
+    strict_auth = LogtoAuth(endpoint="", api_resource="https://api.test.app")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await strict_auth.verify_token(_fake_request("any-token"))
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_jwks_init_failure_rejects_tokens_even_with_dev_bypass(auth):
+    auth._jwks_client = None
+    auth._get_jwks_client = lambda: None
+
+    with pytest.raises(HTTPException) as exc_info:
+        await auth.verify_token(_fake_request("any-token"))
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_logto_with_dev_bypass_stays_anonymous():
+    from mcp_core.auth import LogtoAuth
+    dev_auth = LogtoAuth(endpoint="", api_resource="", dev_bypass=True)
+
+    payload = await dev_auth.verify_token(_fake_request("any-token"))
+    assert payload["sub"] == "anonymous"
+
+
+@pytest.mark.asyncio
 async def test_dev_bypass_disabled_rejects(auth, make_token):
     """When dev_bypass is False, 'dev-bypass' token is treated as a real JWT."""
     from mcp_core.auth import LogtoAuth

@@ -328,13 +328,19 @@ class LogtoAuth(BaseAuth):
 
         jwks_client = self._get_jwks_client()
         if not jwks_client:
-            logger.warning("[auth] Auth not configured, allowing request through")
-            return {
-                "sub": "anonymous",
-                "email": "",
-                "auth_provider": self.provider_name,
-                "dev_mode": True,
-            }
+            # Only a dev-bypass server with no Logto configured may pass tokens unverified.
+            if self.dev_bypass and not self.endpoint:
+                logger.warning("[auth] Auth not configured, allowing request through")
+                return {
+                    "sub": "anonymous",
+                    "email": "",
+                    "auth_provider": self.provider_name,
+                    "dev_mode": True,
+                }
+            raise HTTPException(
+                status_code=503,
+                detail="Logto auth is not configured",
+            )
 
         try:
             signing_key = jwks_client.get_signing_key_from_jwt(token)
