@@ -10,15 +10,20 @@
     ]
   },
   "signUp": {
-    "identifiers": ["email"],
+    "identifiers": [
+      "email"
+    ],
     "password": false,
     "verify": true,
     "secondaryIdentifiers": []
   },
-  "socialSignInConnectorTargets": ["google", "apple", "apple-lmafy"],
+  "socialSignInConnectorTargets": [
+    "google",
+    "apple"
+  ],
   "socialSignIn": {
     "automaticAccountLinking": true,
     "skipRequiredIdentifiers": false
   },
-  "customCss": "/* apple-lmafy stays listed so LetMeActForYou iOS direct sign-in works; hide its duplicate button (3rd in socialSignInConnectorTargets). */\n[class*=\"socialLinkList\"] > [class*=\"socialLinkButton\"]:nth-child(3) { display: none; }\n"
+  "customCss": null
 }

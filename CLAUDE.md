@@ -10,9 +10,8 @@ Shared auth, billing, logging, and MCP-mount layer for WriteForYou and DesignFor
 Every product follows [docs/platform-contract.md](docs/platform-contract.md) and pins a released `mcp-core-auth` version:
 
 - **WriteForYou**: `D:/MyProjects/Claude/writeforyou/tracks/writer-api/services/api/requirements.txt`
-- **DesignForYou**: `D:/MyProjects/Claude/ai-template-gen/backend/requirements.txt`
+- **DesignForYou + LetMeActForYou acting**: production runs `D:/MyProjects/Claude/directforyou/tracks/actforyou` (its `requirements.txt`; deps swap via `scripts/upgrade-mcp-core.sh`). `D:/MyProjects/Claude/ai-template-gen/backend/requirements.txt` builds the same image, so keep both pins equal.
 - **VideoGen**: `D:/MyProjects/Claude/directforyou/tracks/videogen/backend/requirements.txt`
-- **LetMeActForYou**: `D:/MyProjects/Claude/directforyou/tracks/actforyou/requirements.txt`
 - **VN Creator**: `D:/MyProjects/Claude/vn-creator/backend/requirements.txt` (still on 0.3.1; repinned when it moves to the shared Logto)
 
 ## Rename trap
