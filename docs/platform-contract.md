@@ -17,11 +17,24 @@ server, [client-auth-matrix.md](./client-auth-matrix.md) for MCP clients.
 | Token issuer (every backend) | `https://auth.designforyou.swapp1990.org/oidc` |
 | User key in every product database | `logto:<sub>` in `users.auth_user_id` |
 | Sign-in methods offered | Google, Apple, email (one-time code first, password optional) |
+| Name on the Google and Apple sign-in screens | `Swapp1990`, never one product's name |
 
 `auth.swapp1990.org` serves the same tenant, but Logto keeps its session
 cookie per host and Google only accepts the designforyou callback. No client
 or backend may point at it. mcp-core builds the expected issuer from
 `LOGTO_ENDPOINT`, so a backend with the other host rejects every token.
+
+Google and Apple show the name of whatever owns the credential, so both are
+owned by a neutral `Swapp1990` identity rather than a product:
+
+- **Google:** one OAuth client in Cloud project `designforyou-auth`, branded
+  `Swapp1990` with homepage `https://swapp1990.org/` and privacy policy
+  `https://swapp1990.org/privacy/`.
+- **Apple:** one Services ID, `com.swapp1990.accounts.siwa` ("Swapp1990"),
+  grouped under the App ID `com.swapp1990.accounts`. That App ID must never
+  ship: Apple shows the App Store name of the primary App ID once it is live,
+  which is how every product showed "LMWFY" while the connector used
+  WriteForYou's `com.swapnilsawant.lmwfy.siwa`.
 
 Accounts that share a verified email are linked into one Logto user
 (`automaticAccountLinking`). Products never merge users themselves.

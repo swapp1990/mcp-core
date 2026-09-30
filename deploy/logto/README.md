@@ -213,8 +213,15 @@ Either run `bootstrap-apps.py` (above) or do these once the stack is up:
    Registration. Grant it the "Management API access for default" role.
 4. **Google social connector** — create a Google Cloud OAuth 2.0 client,
    redirect URI `https://auth.example.com/callback/<connector-id>`.
-5. **SMTP / SES email connector** — see `provision-ses.sh` for AWS SES.
-6. **Sign-in experience** — apply `sign-in-experience.json` with
+5. **Apple social connector** — one connector, target `apple`, whose client ID
+   is the Services ID `com.swapp1990.accounts.siwa`. Its Web Authentication
+   config lists domain `auth.designforyou.swapp1990.org` and return URLs
+   `https://auth.designforyou.swapp1990.org/callback/<connector-id>` and
+   `.../callback/apple`, with primary App ID `com.swapp1990.accounts` (never
+   shipped, so Apple's sheet says "Swapp1990"). Don't add per-product Apple
+   connectors: each one adds a second Apple button to the shared page.
+6. **SMTP / SES email connector** — see `provision-ses.sh` for AWS SES.
+7. **Sign-in experience** — apply `sign-in-experience.json` with
    `py logto_config.py apply --env-file <backend .env.prod> --yes`.
 
 Then update each product's frontend + backend `.env`:
