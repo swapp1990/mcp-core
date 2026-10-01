@@ -36,11 +36,23 @@ from .echo import with_echo
 from .health import HealthCheck
 from .mcp_mount import mount_mcp
 from .routes import install_routes
+from .store import (
+    Plan,
+    PlanCatalog,
+    PlanState,
+    RevenueCatBilling,
+    RevenueCatClient,
+    RevenueCatError,
+    install_store_routes,
+    require_plan,
+)
 from .tool_logging import ToolLogger
 
 __all__ = [
     "MCPCore", "LogtoAuth", "SupabaseAuth", "StripeBilling", "HealthCheck",
     "ToolLogger", "LogtoDCR", "mount_mcp", "with_echo", "user_identity",
+    "Plan", "PlanCatalog", "PlanState", "RevenueCatBilling", "RevenueCatClient",
+    "RevenueCatError", "require_plan",
 ]
 try:
     from importlib.metadata import version as _pkg_version
@@ -119,6 +131,9 @@ class MCPCore:
         # must be emitted with `Domain=.<apex>` so the retry carries it
         # to /oauth/authorize. Leave empty to keep using Logto's hosted UI.
         branded_sign_in_url: str = "",
+        # Store billing (mcp_core.store): plans over Stripe + RevenueCat, and the RevenueCat project.
+        plan_catalog: Optional[PlanCatalog] = None,
+        revenuecat: Optional[RevenueCatBilling] = None,
     ):
         def _env(key: str, default: str = "") -> str:
             return os.getenv(f"MCP_CORE_{key}", default)
@@ -214,7 +229,16 @@ class MCPCore:
                 subscription_price_label or _env("SUBSCRIPTION_PRICE_LABEL")
             ),
             subscription_allowed_statuses=subscription_allowed_statuses,
+            plan_catalog=plan_catalog,
         )
+
+        self.plans: Optional[PlanCatalog] = plan_catalog
+        if plan_catalog is not None:
+            plan_catalog.dev_bypass = _dev_bypass
+            plan_catalog.stripe_access_statuses = set(self.billing.subscription_allowed_statuses)
+        self.revenuecat: Optional[RevenueCatBilling] = revenuecat
+        if revenuecat is not None:
+            revenuecat._bind(self)
 
         # MongoDB
         self._mongodb_uri = mongodb_uri or _env("MONGODB_URI")
@@ -334,6 +358,29 @@ class MCPCore:
         """Delete the person's shared Logto account; every product's deletion webhook then purges its data."""
         return await _accounts.delete_logto_user(self.dcr, sub)
 
+    async def _delete_store_customer(self, sub: str) -> Optional[bool]:
+        if self.revenuecat is None:
+            return None
+        return await self.revenuecat.delete_customer(sub)
+
+    async def purge_account(self, sub: str, on_deleted: Any = None) -> Dict[str, Any]:
+        """Tombstone ``logto:<sub>``, remove its ``users`` record and RevenueCat customer, then ``on_deleted(sub, db)``."""
+        return await _accounts.purge_account(
+            self.db, sub, on_deleted=on_deleted, delete_store_customer=self._delete_store_customer
+        )
+
+    def install_account_routes(
+        self,
+        app: Any,
+        path: str = "/api/account/delete",
+        before_delete: Any = None,
+        pat_prefixes: Iterable[str] = (),
+    ) -> None:
+        """``POST path``: ``before_delete(user, db)``, purge, then delete the shared Logto account."""
+        _accounts.install_account_routes(
+            app, self, path=path, before_delete=before_delete, pat_prefixes=pat_prefixes
+        )
+
     def install_account_deletion_webhook(
         self,
         app: Any,
@@ -345,7 +392,21 @@ class MCPCore:
         key = signing_key or os.getenv("LOGTO_WEBHOOK_SIGNING_KEY", "") or os.getenv("MCP_CORE_LOGTO_WEBHOOK_SIGNING_KEY", "")
         if not key:
             logger.warning("[mcp-core] LOGTO_WEBHOOK_SIGNING_KEY unset; %s rejects every call", path)
-        _accounts.install_account_deletion_webhook(app, lambda: self.db, key, on_deleted, path)
+        _accounts.install_account_deletion_webhook(
+            app, lambda: self.db, key, on_deleted, path, delete_store_customer=self._delete_store_customer
+        )
+
+    # ── Store billing ─────────────────────────────────────
+
+    def install_store_routes(
+        self,
+        app: Any,
+        *,
+        sync_path: Optional[str] = "/api/billing/app-store/sync",
+        webhook_path: Optional[str] = "/api/billing/revenuecat/webhook",
+    ) -> None:
+        """RevenueCat webhook + client sync routes; ``None`` skips one so a product keeps its own."""
+        install_store_routes(app, self, sync_path=sync_path, webhook_path=webhook_path)
 
     # ── Main middleware ─────���──────────────────────────────
 

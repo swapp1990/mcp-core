@@ -109,6 +109,7 @@ class StripeBilling:
         subscription_allowed_statuses: Optional[Set[str]] = None,
         portal_configuration_id: str = "",
         product_name: str = "",
+        plan_catalog: Any = None,
     ):
         self.stripe_secret_key = stripe_secret_key
         # One Stripe account serves several products; this tags and filters their events.
@@ -130,6 +131,8 @@ class StripeBilling:
             subscription_allowed_statuses or DEFAULT_SUBSCRIPTION_ACCESS_STATUSES
         )
         self.portal_configuration_id = portal_configuration_id or ""
+        # mcp_core.store.PlanCatalog; when set, subscription mode gates on the resolved plan.
+        self.plan_catalog = plan_catalog
 
         self._stripe: Any = None
 
@@ -214,19 +217,33 @@ class StripeBilling:
         return []
 
     def subscription_state(self, user: Dict[str, Any]) -> Dict[str, Any]:
+        from . import store as _store
+
         subscription_id = user.get("stripe_subscription_id") or ""
-        status = user.get("stripe_subscription_status") or (
-            "active" if subscription_id else ""
-        )
+        # WFY's shim wrote App Store purchases as Stripe ids; only the store projection counts them (compat, removed in 0.7).
+        if _store.is_app_store_shim(subscription_id):
+            subscription_id = ""
+            status = ""
+        else:
+            status = user.get("stripe_subscription_status") or (
+                "active" if subscription_id else ""
+            )
         allows_access = bool(
             subscription_id and status in self.subscription_allowed_statuses
         )
+        source = "stripe" if allows_access else ""
+        if not allows_access:
+            projection = _store.store_projection(user)
+            if _store.store_access_active(projection):
+                allows_access, source = True, "store"
+                status = str(projection.get("status") or "")
         return {
             "plan": self.subscription_plan_name,
             "price_label": self.subscription_price_label,
             "required": self.subscription_required,
-            "has_subscription": bool(subscription_id),
+            "has_subscription": bool(subscription_id) or source == "store",
             "allows_access": allows_access,
+            "source": source,
             "status": status,
             "cancel_at_period_end": bool(user.get("stripe_subscription_cancel_at_period_end")),
             "current_period_end": user.get("stripe_subscription_current_period_end"),
@@ -362,7 +379,10 @@ class StripeBilling:
         # or report metered usage.
         if self.subscription_required:
             subscription = self.subscription_state(user)
-            if subscription["allows_access"]:
+            allowed = subscription["allows_access"]
+            if self.plan_catalog is not None:
+                allowed = self.plan_catalog.resolve(user).rank > self.plan_catalog.base.rank
+            if allowed:
                 logger.info(
                     "[billing] Allowed %s via subscription (user=%s, status=%s)",
                     tool_name, user_id, subscription["status"],
@@ -414,8 +434,12 @@ class StripeBilling:
                 "remaining_credits": remaining - cost,
             }
 
-        # Case 2: Stripe subscription active
-        if stripe_subscription_id and stripe_customer_id and self.subscription_allows_access(user):
+        # Case 2: Stripe subscription active (store subscriptions are never metered on Stripe)
+        if (
+            stripe_subscription_id
+            and stripe_customer_id
+            and self.subscription_state(user)["source"] == "stripe"
+        ):
             event = await self.meter_usage(user, cost, tool_name)
             return {
                 "cost": cost,
@@ -847,7 +871,7 @@ class StripeBilling:
         free = user.get("free_credits", 0)
         used = user.get("credits_used", 0)
         subscription = self.subscription_state(user)
-        return {
+        summary = {
             "free_credits": free,
             "credits_used": used,
             "remaining": max(0, free - used),
@@ -859,6 +883,13 @@ class StripeBilling:
             "pack_options": self.pack_options(),
             "auto_recharge": self.auto_recharge_public_state(user),
         }
+        if self.plan_catalog is not None:
+            from . import store as _store
+
+            summary["plan"] = self.plan_catalog.resolve(user).to_dict()
+            summary["plans"] = self.plan_catalog.public()
+            summary["store_subscription"] = _store._public_projection(_store.store_projection(user))
+        return summary
 
     def _subscription_update_fields(
         self,
@@ -872,7 +903,7 @@ class StripeBilling:
         stored_subscription_id = (
             None if status in TERMINAL_SUBSCRIPTION_STATUSES else raw_subscription_id
         )
-        return {
+        fields = {
             "stripe_customer_id": customer_id or data.get("customer") or "",
             "stripe_subscription_id": stored_subscription_id,
             "stripe_subscription_status": status,
@@ -880,12 +911,16 @@ class StripeBilling:
                 data.get("cancel_at_period_end")
             ),
             "stripe_subscription_current_period_end": data.get("current_period_end"),
-            "stripe_subscription_price_id": (
-                ((((data.get("items") or {}).get("data") or [{}])[0]).get("price") or {}).get("id")
-                if isinstance(data.get("items"), dict)
-                else data.get("price_id")
-            ),
         }
+        price_id = (
+            ((((data.get("items") or {}).get("data") or [{}])[0]).get("price") or {}).get("id")
+            if isinstance(data.get("items"), dict)
+            else data.get("price_id")
+        )
+        # A checkout session carries no price; writing None would erase the one subscription.created stored.
+        if price_id:
+            fields["stripe_subscription_price_id"] = price_id
+        return fields
 
     # ── Stripe webhook handler ────────────────────────────
 

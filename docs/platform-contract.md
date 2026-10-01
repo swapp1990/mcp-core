@@ -52,6 +52,32 @@ Accounts that share a verified email are linked into one Logto user
   tagged for another product. Credits for a purchase are granted once per Stripe
   session or payment intent (`users.billing_grant_ids`), so retried events add nothing.
 
+## Store billing (App Store via RevenueCat)
+
+- Each product has its own RevenueCat project. The iPhone app calls
+  `Purchases.logIn(<Logto sub>)`, so the RevenueCat app user id is always the
+  signed-in caller's `sub`. The server never takes it from a request body.
+- `users.store_subscription` holds the store state, and only
+  `core.revenuecat.reconcile(user)` writes it. Reconcile re-reads the subscriber
+  from RevenueCat's REST API, so a webhook only says *who* to re-read. No product
+  writes Stripe fields for an App Store purchase.
+- One `PlanCatalog` per product maps Stripe prices and store entitlements or
+  product ids to plans. `require_plan(core, user, "pro")` reads Stripe, store and
+  direct grants, and the highest plan wins. A 402 carries `code: subscription_required`,
+  `required_tier`, `current_tier` and `upgrade_url`.
+- The RevenueCat webhook checks the configured `Authorization` value with a
+  constant-time compare, and keeps an idempotent event log
+  (`store_billing_events`, keyed `revenuecat:<environment>:<event id>`).
+- Sandbox purchases grant access in production only to accounts on
+  `REVENUECAT_SANDBOX_ALLOWLIST` (app user ids or emails, for App Review and test
+  accounts). Sandbox events for anyone else are logged and ignored.
+
+| Variable | Meaning |
+|---|---|
+| `REVENUECAT_SECRET_API_KEY` | This product's RevenueCat secret key (v1) |
+| `REVENUECAT_WEBHOOK_AUTH` / `REVENUECAT_WEBHOOK_AUTHORIZATION` | `Authorization` value set on the RevenueCat webhook (each product keeps its existing name) |
+| `REVENUECAT_SANDBOX_ALLOWLIST` | Comma-separated app user ids or emails whose sandbox purchases count |
+
 ## Client behavior
 
 | | Web | iOS (Expo) |
@@ -78,6 +104,16 @@ every product backend, and each backend removes its own data for that `logto:<su
 product's `users` record and calls `on_deleted(sub, db)` for anything else. Each
 product has its own Logto hook pointing at its `/api/logto/webhook`. The UI must say
 the account is removed from every swapp1990 product.
+
+- The delete button calls `POST /api/account/delete` on the product host
+  (`core.install_account_routes(app, before_delete=...)`). Only a real access token
+  for that product may call it: personal access tokens and machine tokens are refused.
+  The route purges the product's data first and then deletes the Logto user.
+- Deletion also records a `deleted_accounts` tombstone. An access token issued
+  before the deletion gets 401 instead of recreating a `users` record with fresh
+  free credits.
+- When the product has a RevenueCat secret, deletion also deletes the person's
+  RevenueCat customer. A 404 is fine. A failure is logged and never blocks the purge.
 
 ## Configuration names
 
