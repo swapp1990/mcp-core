@@ -7,11 +7,15 @@ export interface AuthValue {
   /** The saved session stopped working (refresh rejected or the API returned 401). */
   expired: boolean;
   user: AuthUser | null;
+  /** A silent sign-in just changed the account: show "Signed in as <email>", then call dismissAnnouncement(). */
+  announced: boolean;
+  dismissAnnouncement(): void;
+  switchAccount(returnTo?: string): Promise<void>;
   signIn(method?: SignInMethod, returnTo?: string): Promise<void>;
   completeSignIn(): Promise<void>;
   consumeReturnTo(): string;
   getAccessToken(): Promise<string | null>;
-  signOut(postLogoutRedirect?: string): Promise<void>;
+  signOut(): Promise<void>;
   expire(): void;
 }
 
