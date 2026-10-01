@@ -1,0 +1,371 @@
+{
+  "version": 1,
+  "unmanaged": {
+    "applicationNamePrefixes": [
+      "mcp-dcr-"
+    ],
+    "applicationIds": [
+      "admin-console",
+      "m-default"
+    ],
+    "resourceIndicators": [
+      "https://default.logto.app/api"
+    ]
+  },
+  "signInExperience": "sign-in-experience.json",
+  "resources": [
+    {
+      "indicator": "https://actforyou.swapp1990.org",
+      "name": "ActForYou API",
+      "accessTokenTtl": 3600,
+      "scopes": []
+    },
+    {
+      "indicator": "https://api.designforyou.app",
+      "name": "ActForYou API (legacy iOS audience)",
+      "accessTokenTtl": 604800,
+      "scopes": [
+        "designforyou:generate",
+        "designforyou:read"
+      ]
+    },
+    {
+      "indicator": "https://api.writer.swapp1990.org",
+      "name": "Writer API",
+      "accessTokenTtl": 604800,
+      "scopes": [
+        "writer:read",
+        "writer:write"
+      ]
+    },
+    {
+      "indicator": "https://designforyou.swapp1990.org",
+      "name": "DesignForYou API",
+      "accessTokenTtl": 604800,
+      "scopes": [
+        "designforyou:generate",
+        "designforyou:read"
+      ]
+    },
+    {
+      "indicator": "https://jobalerts.swapp1990.org",
+      "name": "JobsForYou API",
+      "accessTokenTtl": 604800,
+      "scopes": []
+    },
+    {
+      "indicator": "https://snapforyou.swapp1990.org/api",
+      "name": "SnapForYou API",
+      "accessTokenTtl": 3600,
+      "scopes": [
+        "snapforyou:worker"
+      ]
+    },
+    {
+      "indicator": "https://videogen.swapp1990.org",
+      "name": "VideoGen API",
+      "accessTokenTtl": 604800,
+      "scopes": []
+    },
+    {
+      "indicator": "https://writer.swapp1990.org",
+      "name": "Writer API",
+      "accessTokenTtl": 604800,
+      "scopes": [
+        "writer:generate",
+        "writer:read"
+      ]
+    }
+  ],
+  "applications": [
+    {
+      "id": "318nu5a9bnlgxqix9chii",
+      "name": "ActForYou MCP-DCR",
+      "type": "MachineToMachine",
+      "description": "ActForYou MCP OAuth proxy client (mcp-core)"
+    },
+    {
+      "id": "grqxmjkxqk2c9oyffap0p",
+      "name": "Autonomous Writer",
+      "type": "SPA",
+      "redirectUris": [
+        "http://127.0.0.1:5173/callback",
+        "http://127.0.0.1:5175/callback",
+        "http://127.0.0.1:5176/callback",
+        "http://127.0.0.1:5179/callback",
+        "http://127.0.0.1:5181/callback",
+        "http://localhost:3000/callback",
+        "https://writer.swapp1990.org/callback",
+        "lmwfy://callback",
+        "lmwfy://callback/"
+      ],
+      "postLogoutRedirectUris": [
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5175",
+        "http://127.0.0.1:5176",
+        "http://127.0.0.1:5179",
+        "http://127.0.0.1:5181",
+        "http://localhost:3000",
+        "https://writer.swapp1990.org"
+      ]
+    },
+    {
+      "id": "dvlhpk4tv14w8kxfzu7vw",
+      "name": "DesignForYou MCP-DCR",
+      "type": "MachineToMachine"
+    },
+    {
+      "id": "9dgcnaditmp5g6clh1fvd",
+      "name": "DesignForYou Web",
+      "type": "SPA",
+      "redirectUris": [
+        "http://localhost:5176/callback",
+        "http://localhost:5177/callback",
+        "https://designforyou.swapp1990.org/callback"
+      ],
+      "postLogoutRedirectUris": [
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5173/",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:5174/",
+        "http://localhost:5173",
+        "http://localhost:5173/",
+        "http://localhost:5174",
+        "http://localhost:5174/",
+        "http://localhost:5176",
+        "http://localhost:5177",
+        "https://designforyou.swapp1990.org",
+        "https://designforyou.swapp1990.org/"
+      ]
+    },
+    {
+      "id": "5krdw5kd8x6x4nfl0nhd2",
+      "name": "JobsForYou MCP-DCR",
+      "type": "MachineToMachine",
+      "description": "JobsForYou MCP OAuth proxy client (mcp-core)"
+    },
+    {
+      "id": "kkkwzabafa86w75m9jbwd",
+      "name": "JobsForYou Web",
+      "type": "SPA",
+      "description": "jobalerts.swapp1990.org website",
+      "redirectUris": [
+        "http://127.0.0.1:5173/callback",
+        "http://localhost:5173/callback",
+        "https://jobalerts.swapp1990.org/callback",
+        "https://jobalerts.swapp1990.org/callback/"
+      ],
+      "postLogoutRedirectUris": [
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "https://jobalerts.swapp1990.org",
+        "https://jobalerts.swapp1990.org/"
+      ]
+    },
+    {
+      "id": "yhuu7vgv03zs2ak06xj6x",
+      "name": "LetMeActForYou Web",
+      "type": "SPA",
+      "description": "actforyou.swapp1990.org website",
+      "redirectUris": [
+        "https://actforyou.swapp1990.org/callback"
+      ],
+      "postLogoutRedirectUris": [
+        "https://actforyou.swapp1990.org",
+        "https://actforyou.swapp1990.org/"
+      ]
+    },
+    {
+      "id": "lwg600ndwbb83omoig9t4",
+      "name": "LetMeActForYou iOS (Native)",
+      "type": "Native",
+      "description": "LMAFY iOS native OIDC client — self-hosted cutover 2026-09-19. Do not reuse WFY apps.",
+      "redirectUris": [
+        "letmeactforyou://callback",
+        "letmeactforyou://callback/"
+      ],
+      "postLogoutRedirectUris": [
+        "letmeactforyou://callback",
+        "letmeactforyou://callback/"
+      ],
+      "customClientMetadata": {
+        "refreshTokenTtl": 15552000,
+        "refreshTokenTtlInDays": 180,
+        "rotateRefreshToken": true
+      }
+    },
+    {
+      "id": "wyglvzbiqmvxdaja7ycax",
+      "name": "SnapForYou",
+      "type": "SPA",
+      "description": "SnapForYou web app (invite-only)",
+      "redirectUris": [
+        "http://127.0.0.1:8031/app/",
+        "http://127.0.0.1:8791/app/",
+        "http://localhost:8791/app/",
+        "https://snapforyou.swapp1990.org/app/",
+        "https://snapforyou.swapp1990.org/callback"
+      ],
+      "postLogoutRedirectUris": [
+        "http://127.0.0.1:8031/",
+        "http://127.0.0.1:8791/app/",
+        "https://snapforyou.swapp1990.org/"
+      ],
+      "customClientMetadata": {
+        "corsAllowedOrigins": [
+          "http://127.0.0.1:8791",
+          "http://localhost:8791",
+          "https://snapforyou.swapp1990.org"
+        ]
+      }
+    },
+    {
+      "id": "un7yps9ratu99k76dh4kf",
+      "name": "SnapForYou worker",
+      "type": "MachineToMachine",
+      "description": "Render worker on the owner's PC",
+      "roles": [
+        "SnapForYou worker"
+      ]
+    },
+    {
+      "id": "16s5fnea3mlchi10xfu82",
+      "name": "VideoGen Web",
+      "type": "SPA",
+      "description": "videogen.swapp1990.org website",
+      "redirectUris": [
+        "http://127.0.0.1:5173/callback",
+        "http://localhost:5173/callback",
+        "http://localhost:5176/callback",
+        "https://videogen.swapp1990.org/callback",
+        "https://videogen.swapp1990.org/callback/"
+      ],
+      "postLogoutRedirectUris": [
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://localhost:5173/",
+        "http://localhost:5176",
+        "https://videogen.swapp1990.org",
+        "https://videogen.swapp1990.org/"
+      ]
+    },
+    {
+      "id": "7vsb81xbjs53sf63hh266",
+      "name": "WriteForYou iOS (LMWFY)",
+      "type": "Native",
+      "description": "Gate B Logto for com.swapnilsawant.lmwfy",
+      "redirectUris": [
+        "lmwfy://callback",
+        "lmwfy://callback/"
+      ],
+      "postLogoutRedirectUris": [
+        "lmwfy://callback",
+        "lmwfy://callback/"
+      ],
+      "customClientMetadata": {
+        "refreshTokenTtl": 15552000,
+        "refreshTokenTtlInDays": 180,
+        "rotateRefreshToken": true
+      }
+    },
+    {
+      "id": "eo8n69cjaqqqo9yagwrb3",
+      "name": "Writer MCP-DCR",
+      "type": "MachineToMachine"
+    }
+  ],
+  "hooks": [
+    {
+      "name": "ActForYou account deletion",
+      "events": [
+        "User.Deleted"
+      ],
+      "url": "https://actforyou.swapp1990.org/api/logto/webhook",
+      "enabled": true
+    },
+    {
+      "name": "DesignForYou account deletion",
+      "events": [
+        "User.Deleted"
+      ],
+      "url": "https://designforyou.swapp1990.org/api/logto/webhook",
+      "enabled": true
+    },
+    {
+      "name": "JobsForYou account deletion",
+      "events": [
+        "User.Deleted"
+      ],
+      "url": "https://jobalerts.swapp1990.org/api/logto/webhook",
+      "enabled": true
+    },
+    {
+      "name": "SnapForYou account deletion",
+      "events": [
+        "User.Deleted"
+      ],
+      "url": "https://snapforyou.swapp1990.org/api/logto/webhook",
+      "enabled": true
+    },
+    {
+      "name": "VideoGen account deletion",
+      "events": [
+        "User.Deleted"
+      ],
+      "url": "https://videogen.swapp1990.org/api/logto/webhook",
+      "enabled": true
+    },
+    {
+      "name": "WriteForYou account deletion",
+      "events": [
+        "User.Deleted"
+      ],
+      "url": "https://writer.swapp1990.org/api/logto/webhook",
+      "enabled": true
+    }
+  ],
+  "connectors": [
+    {
+      "id": "uwyv4geikbgomej4t07n6",
+      "connectorId": "apple-universal",
+      "target": "apple",
+      "syncProfile": false,
+      "public": {
+        "clientId": "com.swapp1990.accounts.siwa",
+        "scope": "name email"
+      }
+    },
+    {
+      "id": "2zzqhsl9snrl",
+      "connectorId": "aws-ses-mail",
+      "target": "aws-ses",
+      "syncProfile": false,
+      "public": {
+        "emailAddress": "noreply@swapp1990.org",
+        "region": "us-west-2"
+      }
+    },
+    {
+      "id": "qinjb62m13jn",
+      "connectorId": "google-universal",
+      "target": "google",
+      "syncProfile": false,
+      "public": {
+        "clientId": "654324503134-f94g29pno5e8td296285apofhkqebqj2.apps.googleusercontent.com",
+        "prompts": [
+          "select_account"
+        ],
+        "scope": "openid profile email"
+      }
+    },
+    {
+      "id": "jt2b316pyyra",
+      "connectorId": "mock-social-connector",
+      "target": "mock-social",
+      "syncProfile": false,
+      "public": {
+        "clientId": "mock"
+      }
+    }
+  ]
+}

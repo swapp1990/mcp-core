@@ -19,7 +19,8 @@ differ between `docker-compose.local.yml` and `docker-compose.prod.yml`.
 | `verify.py` | End-to-end compatibility check: mcp-core talking to self-host. |
 | `deploy.sh` | One-shot prod deploy script (rsync compose files + `up -d`). Refuses to replace a server's differing `docker-compose.prod.yml` unless `LOGTO_FORCE_COMPOSE=1`. |
 | `sign-in-experience.json` | Desired sign-in experience fields (methods, social buttons, account linking, custom CSS). Source of truth; edit here, not in the console. |
-| `logto_config.py` | `snapshot` writes the live apps, resources, connectors and sign-in experience to `logto-state.json` (gitignored, no secrets); `apply` diffs `sign-in-experience.json` against the tenant and patches it with `--yes`. |
+| `tenant.json` | Desired state of the shared tenant: applications, API resources, hooks, connectors (public config only) and a pointer to `sign-in-experience.json`. No secrets. `unmanaged` lists what the tool never tracks (DCR `mcp-dcr-*` apps, `m-default`, the Management API resource). |
+| `logto_config.py` | `import` writes `tenant.json` from the live tenant; `plan` diffs it read-only; `snapshot` writes everything live to `logto-state.json` (gitignored, no secrets); `apply` diffs `sign-in-experience.json` against the tenant and patches it with `--yes`. |
 
 ## Local dev
 
@@ -98,6 +99,23 @@ py bootstrap-apps.py \
 
 It prints a paste-ready `.env` snippet (`LOGTO_APP_ID`, `MCP_LOGTO_APP_ID/SECRET`,
 etc.) for each product at the end.
+
+## Tenant configuration as code
+
+`tenant.json` and `sign-in-experience.json` are the reviewed copy of the shared tenant.
+Any env file with the `LOGTO_MGMT_*` values works (e.g. a backend's `.env.prod`):
+
+```bash
+py -3 logto_config.py import --env-file <backend .env.prod>   # live -> tenant.json (+ sign-in-experience.json fields)
+py -3 logto_config.py plan   --env-file <backend .env.prod>   # read-only diff; exit 0 = no drift, 2 = drift
+```
+
+`plan` prints `+` (in the file, not live: would create), `~` (field would change),
+`?` (live object not in the file) and `-` (live list entry not in the file). Live-only
+objects and entries are never removed. `plan` right after `import` must show no drift.
+Secrets (app secrets, hook signing keys and headers, connector secrets) are never read
+into the file or printed; connectors keep only public fields such as `clientId`.
+Creating or changing objects other than the sign-in experience is not implemented yet.
 
 ## mcp-core compatibility notes
 
