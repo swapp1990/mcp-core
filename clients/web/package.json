@@ -1,6 +1,6 @@
 {
   "name": "@swapp1990/auth-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Shared Logto sign-in for swapp1990 web apps, with the platform defaults baked in.",
   "type": "module",
   "main": "./src/index.js",

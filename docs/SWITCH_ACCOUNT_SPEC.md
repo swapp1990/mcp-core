@@ -25,7 +25,7 @@ All of this was read from the live Logto 1.38.0 (`/opt/apps/logto-docker`), its 
 | At logout, oidc-provider keeps grants that include `offline_access` | `oidc-provider/lib/actions/end_session.js:164-173` (`persistsLogout`) | Every web app asks for `offline_access`, so **other apps' refresh tokens survive a sign-out** and keep renewing as the old account |
 | Access tokens live 7 days for Writer, VideoGen, DesignForYou and JobsForYou APIs (1 hour for ActForYou and SnapForYou) | `resources.access_token_ttl` | Revoking tokens server-side would not stop a stale app for up to a week; the switch has to happen in each client |
 | Backends verify JWTs locally with mcp-core | `mcp_core.auth` JWKS | No backend can tell that a token's session ended |
-| `prompt=none` works | `/oidc/auth?...&prompt=none` with no session → 303 to the callback with `error=login_required` | A top-level silent sign-in can pick up whatever account the Logto session now holds |
+| `prompt=none` cannot be the silent sign-in | Probe 2026-10-01 with a live session: an app that already holds a grant gets a code but **no refresh token** (Logto drops `offline_access` unless `prompt=consent`); an app the session never visited gets `error=consent_required` | The silent sign-in uses the apps' normal `prompt=consent`, which finishes without a page when a Logto session exists |
 | Logto pages send `X-Frame-Options: SAMEORIGIN` | `curl -I /oidc/auth` | A hidden-iframe silent check is not reliable; use a top-level redirect |
 | Back-channel logout is enabled in Logto, but no app sets `backchannelLogoutUri` | Logto config `features.backchannelLogout`, `applications.oidc_client_metadata` | Available for later server-side hardening (section 9) |
 | The Google connector sends `prompts: ["select_account"]` | `connectors` row `qinjb62m13jn` | Picking "Continue with Google" during a switch shows Google's account chooser |
@@ -122,14 +122,14 @@ On `visibilitychange` to visible, `focus`, and the `storage` event (another tab 
   2. If another tab of the same app has already signed in as `<other>` (its tokens in this origin's `localStorage` now say `<other>`), call `location.reload()`. No Logto round trip is needed.
   3. Otherwise, run the silent sign-in (5.4) with `returnTo` set to the current path and query. The tab lands back on the same page as the new account, and the "Signed in as `<email>`" toast (5.2) says what happened.
 
-  Unsaved work in the tab is lost, which the owner accepted. auth-web never suppresses the browser's own "Leave site?" prompt: an app that already registers `beforeunload` for unsaved edits still gets it. If the person chooses to stay, the tab keeps `switchedElsewhere` (no API calls) and tries again on its next focus.
+  Unsaved work in the tab is lost, which the owner accepted. auth-web never suppresses the browser's own "Leave site?" prompt: an app that already registers `beforeunload` for unsaved edits still gets it. If the person chooses to stay, the tab keeps blocking API calls and tries again on its next focus (a reload, since the silent sign-in already ran for that hint value).
 
 ### 5.4 Silent sign-in
 
-A top-level redirect to `/oidc/auth` with `prompt=none`, the app's normal redirect URI and PKCE.
+A top-level redirect to `/oidc/auth` with the app's normal `prompt=consent`, redirect URI and PKCE: the same request as a click on Sign in. (`prompt=none` was ruled out: it returns no refresh token and refuses apps the session has not visited; see section 2.)
 
-- The Logto session exists: Logto returns a code at once; `completeSignIn()` exchanges it and writes the hint. The person sees a short redirect flash, not a sign-in page.
-- No session (`error=login_required`, or `consent_required` / `interaction_required`): `completeSignIn()` must treat this as "signed out", not throw. It clears local state, writes `v1.-` only when the error is `login_required`, and lands on `returnTo` signed out.
+- The Logto session exists: Logto goes through its consent step without a page and returns a code; `completeSignIn()` exchanges it and writes the hint. The person sees a short redirect flash, not a sign-in page.
+- The Logto session is gone (a stale hint, e.g. after its 14-day lifetime): the person lands on Logto's sign-in page instead of the app. They can sign in there, or go back; the loop guard stops a second automatic attempt in this tab.
 - Loop guard: record `sessionStorage["swapp1990.silent"] = <hint value>` before redirecting. Never run a second silent sign-in for the same hint value in the same tab.
 
 ### 5.5 Sign out
@@ -152,7 +152,7 @@ const auth = createAuth({
 await auth.init();               // NEW. Runs 5.1 step 4 and 5.2. Returns { signedIn, user, redirecting }
 auth.switchAccount(returnTo?);   // NEW. Section 5.1
 auth.signOut();                  // CHANGED. Writes v1.- and always returns to location.origin (no path, no trailing slash)
-auth.completeSignIn();           // CHANGED. Writes the hint; treats login_required as signed out
+auth.completeSignIn();           // CHANGED. Writes the hint after the code exchange
 auth.watchAccount(listener);     // NEW. Section 5.3; runs the sign-out or reload itself, then calls listener({ type: "signed-out" | "reloading" }); returns unsubscribe
 auth.getAccessToken();           // CHANGED. Returns null while switchedElsewhere, until the reload
 ```
@@ -180,7 +180,7 @@ Logto changes: none required for the auth-web apps. They sign out to `location.o
 
 ## 8. Edge cases and safety
 
-- **Forged or stale hint.** Any `*.swapp1990.org` page can write the cookie; all of them are ours. The worst a bad value can do is one silent sign-in (which returns the real Logto session's account) or a local sign-out. It can never sign anyone in as another person.
+- **Forged or stale hint.** Any `*.swapp1990.org` page can write the cookie; all of them are ours. The worst a bad value can do is one silent sign-in (which returns the real Logto session's account) or a local sign-out. It can never sign anyone in as another person. A stale `v1.<sub>` (the Logto session ended without a sign-out) sends a page to Logto's sign-in page once per tab; see 5.4.
 - **Two tabs of the same app.** They share `localStorage`. The tab that switched writes the new tokens; the other tab sees the `storage` event and re-renders as the new account (5.3 step 3). Reconcile compares against the account the tab rendered with, not only the stored one.
 - **Old account's tokens.** Each app revokes its own old refresh token when it reconciles. An app that isn't opened keeps a dangling refresh token until its TTL (14 days by default for SPAs). Its 7-day access tokens remain valid server-side but are no longer held by any client. Section 9 covers hardening.
 - **Billing safety.** Between the focus and the reload, a stale tab sends no authenticated calls (`getAccessToken()` returns null), so no credits move on the wrong account.
@@ -208,7 +208,7 @@ Answered by Swapnil on 2026-10-01 unless marked open.
 
 ## 11. Rollout
 
-1. **auth-web 0.2.0** with unit tests (state machine, hint read/write, the `login_required` callback, the loop guard). Release `auth-web-v0.2.0`.
+1. **auth-web 0.2.0** with unit tests (state machine, hint read/write, the loop guard, the announcement flag). Release `auth-web-v0.2.0`.
 2. **Pilot on VideoGen and WriteForYou web.** Deploy both. Verify with two accounts (section 12).
 3. **DesignForYou and JobsForYou.**
 4. **ActForYou web and SnapForYou** (per Q4).
