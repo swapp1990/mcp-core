@@ -906,3 +906,32 @@ async def test_repeated_auto_recharge_event_grants_credits_once(billing, mock_db
 
     db_user = await mock_db["users"].find_one({"logto_user_id": "user_1"})
     assert db_user["free_credits"] == 60
+
+
+@pytest.mark.asyncio
+async def test_checkout_completed_after_subscription_created_keeps_the_price(billing, mock_db, mock_stripe):
+    fake_stripe, _ = mock_stripe
+    billing._stripe = fake_stripe
+    await mock_db["users"].insert_one({"auth_user_id": "logto:u1", "logto_user_id": "u1"})
+    created = {
+        "type": "customer.subscription.created",
+        "data": {"object": {
+            "id": "sub_1", "customer": "cus_1", "status": "active",
+            "items": {"data": [{"price": {"id": "price_pro"}}]},
+            "metadata": {"auth_user_id": "logto:u1"},
+        }},
+    }
+    completed = {
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": "cs_1", "mode": "subscription", "customer": "cus_1", "subscription": "sub_1",
+            "metadata": {"auth_user_id": "logto:u1", "kind": "metered_subscription"},
+        }},
+    }
+
+    await billing.handle_webhook(_webhook_request(created), mock_db, webhook_secret="test")
+    await billing.handle_webhook(_webhook_request(completed), mock_db, webhook_secret="test")
+
+    db_user = await mock_db["users"].find_one({"auth_user_id": "logto:u1"})
+    assert db_user["stripe_subscription_id"] == "sub_1"
+    assert db_user["stripe_subscription_price_id"] == "price_pro"

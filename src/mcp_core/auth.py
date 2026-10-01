@@ -23,6 +23,8 @@ import jwt
 from fastapi import HTTPException, Request
 from jwt import PyJWKClient
 
+from .accounts import DELETED_ACCOUNTS
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -212,7 +214,17 @@ class BaseAuth:
             if existing is not None:
                 await users.update_one({"_id": existing["_id"]}, {"$set": set_fields})
                 return await users.find_one({"_id": existing["_id"]})
+        else:
+            existing = await users.find_one_and_update(
+                {"auth_user_id": profile["auth_user_id"]},
+                {"$set": set_fields},
+                return_document=True,
+            )
+            if existing is not None:
+                return existing
 
+        # Only a new record is checked, so the tombstone costs one read per first call, not per call.
+        await self.check_not_deleted(db, token_payload)
         result = await users.find_one_and_update(
             {"auth_user_id": profile["auth_user_id"]},
             {"$set": set_fields, "$setOnInsert": set_on_insert},
@@ -220,6 +232,34 @@ class BaseAuth:
             return_document=True,
         )
         return result
+
+    async def check_not_deleted(self, db: Any, token_payload: Dict[str, Any]) -> None:
+        """401 when the account was deleted after this token was issued (``deleted_accounts`` tombstone).
+
+        Products that create their own per-person records from a token should call it too.
+        """
+        if db is None:
+            return
+        key = self._normalize_claims(token_payload)["auth_user_id"]
+        tombstone = await db[DELETED_ACCOUNTS].find_one({"_id": key}) if key else None
+        if not tombstone:
+            return
+        deleted_at = tombstone.get("deleted_at")
+        if isinstance(deleted_at, datetime) and deleted_at.tzinfo is None:
+            deleted_at = deleted_at.replace(tzinfo=timezone.utc)
+        iat = token_payload.get("iat")
+        issued_after = (
+            isinstance(deleted_at, datetime)
+            and isinstance(iat, (int, float))
+            and not isinstance(iat, bool)
+            and iat >= deleted_at.timestamp()
+        )
+        if not issued_after:
+            raise HTTPException(
+                status_code=401,
+                detail="This account has been deleted.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
     def _ephemeral_user(self, profile: Dict[str, Any]) -> Dict[str, Any]:
         user = {

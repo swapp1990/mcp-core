@@ -861,3 +861,70 @@ try {
 | `MCP_CORE_MCP_LOGTO_APP_SECRET` | `mcp_logto_app_secret` | `""` |
 
 Constructor args always take precedence over env vars.
+
+## 10. Store Billing, Plans and Account Deletion
+
+App Store purchases (RevenueCat) and Stripe subscriptions feed one plan resolver.
+Pass every setting explicitly, so each product keeps its existing env names:
+
+```python
+import os
+from mcp_core import MCPCore, Plan, PlanCatalog, RevenueCatBilling, require_plan
+from mcp_core.store import ids_from_env
+
+catalog = PlanCatalog(
+    [
+        Plan("free", 0),
+        Plan("pro", 1, display_name="LetMeActForYou Pro",
+             store_entitlements={"LetMeActForYou Pro"},
+             stripe_price_ids=ids_from_env("STRIPE_PRO_PRICE_ID")),
+    ],
+    unknown_paid_plan="",                 # an unmapped active purchase grants nothing
+    upgrade_url="https://myapp.example/billing",
+)
+core = MCPCore(
+    ...,
+    plan_catalog=catalog,
+    revenuecat=RevenueCatBilling(
+        secret_key=os.getenv("REVENUECAT_SECRET_API_KEY", ""),            # legacy v1 secret key
+        webhook_authorization=os.getenv("REVENUECAT_WEBHOOK_AUTHORIZATION", ""),
+        # sandbox_allowlist defaults to REVENUECAT_SANDBOX_ALLOWLIST
+        on_change=keep_my_allowance,      # optional: (user, state) after every reconcile
+    ),
+)
+core.install_store_routes(app, sync_path="/api/billing/app-store/sync",
+                          webhook_path="/api/billing/revenuecat/webhook")
+
+state = await require_plan(core, user, "pro", fresh_within_s=300)   # PlanState, or 402
+```
+
+- `core.plans.resolve(user)` returns `PlanState(plan, rank, source, status, expires_at)`.
+  `source` is `stripe`, `store`, `direct` (`direct_grants`) or `dev` (`dev_force_plan`, honored only with the dev auth bypass).
+- `core.revenuecat.reconcile(user)` is the only writer of `users.store_subscription`.
+  Call it from a product's own sync route if you keep one; `core.revenuecat.sync(user)`
+  is the same call with RevenueCat failures turned into a retryable 503.
+- `on_change(user, state)` runs after **every** reconcile. `state` is the new
+  `store_subscription` plus `previous` and `changed` (plan or status moved), so a
+  product can keep its own allowance and its own freshness timestamp.
+- `Plan(credits_per_period=N, period="billing" | "calendar_month")` grants mcp-core
+  credits once per period (`billing_grant_ids` key `revenuecat:<entitlement>:<period>`).
+- With a catalog, subscription mode (`BILLING_MODE=subscription`) lets a paid tool run
+  when the resolved plan ranks above the free plan, and `/api/billing/credits` adds
+  `plan`, `plans` and `store_subscription`.
+
+Account deletion, for the "Delete account" button:
+
+```python
+async def wipe_my_data(user, db):          # runs before the purge; a returned dict is merged into the response
+    ...
+
+core.install_account_routes(app, before_delete=wipe_my_data, pat_prefixes=("wpat_",))
+core.install_account_deletion_webhook(app, on_deleted=purge_rest_of_my_data)
+```
+
+`POST /api/account/delete` refuses personal access tokens (`pat_prefixes`, and any
+token the provider's own verifier rejects), machine tokens and tokens for another
+product's audience. It runs `before_delete(user, db)`, writes the `deleted_accounts`
+tombstone, purges `users`, deletes the RevenueCat customer when a secret is set,
+then deletes the shared Logto user. Products that create their own per-person records
+straight from a token should call `await core.auth.check_not_deleted(db, payload)` first.

@@ -123,6 +123,16 @@ SUBSCRIPTION_PLAN_NAME="Pro"
 SUBSCRIPTION_PRICE_LABEL="$20/month"
 ```
 
+### Store billing and plans (`mcp_core.store`)
+
+App Store subscriptions through RevenueCat, next to Stripe:
+
+- `PlanCatalog` / `Plan`: map Stripe prices and store entitlements to plans. `require_plan(core, user, "pro")` reads both, and the highest plan wins.
+- `RevenueCatBilling`: webhook (constant-time `Authorization` check, idempotent event log), `reconcile(user)` through the v1 REST API behind `RevenueCatClient`, a sandbox allowlist, and an `on_change` hook for product-owned allowances.
+- `core.install_store_routes(app)` and `core.install_account_routes(app, before_delete=...)` (`POST /api/account/delete`).
+
+See [integration guide section 10](docs/integration-guide.md#10-store-billing-plans-and-account-deletion).
+
 ### Tool Logging (`mcp_core.tool_logging.ToolLogger`)
 
 Audit trail for every MCP tool call. Writes to MongoDB `tool_logs` collection.
