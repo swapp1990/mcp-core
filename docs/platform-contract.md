@@ -63,8 +63,9 @@ Accounts that share a verified email are linked into one Logto user
 | Sign-out | Ends the Logto session (`end_session`) | Revokes the refresh token and clears the device |
 | Rejected token (401) | Show the signed-out state; never look signed in while calls fail | Same |
 
-Web apps get these defaults from [`@swapp1990/auth-web`](../clients/web/README.md)
-instead of hand-writing Logto calls. Product sign-in pickers may call Logto with
+Web apps get these defaults from [`@swapp1990/auth-web`](../clients/web/README.md),
+and iOS apps from [`@swapp1990/auth-expo`](../clients/expo/README.md), instead of
+hand-writing Logto calls. Product sign-in pickers may call Logto with
 `direct_sign_in` for a specific method, but must offer all three methods.
 
 ## Account deletion
@@ -97,4 +98,4 @@ Backends pass these to `MCPCore` explicitly:
    config script, not by hand in the console.
 2. Give it its own `DB_NAME`.
 3. Pin a released `mcp-core-auth` version from PyPI (not a git commit).
-4. Use `@swapp1990/auth-web` for web sign-in, and the client defaults above elsewhere.
+4. Use `@swapp1990/auth-web` for web sign-in, `@swapp1990/auth-expo` for iOS, and the client defaults above elsewhere.

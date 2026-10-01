@@ -1,0 +1,15 @@
+{
+  "name": "auth-expo-fixture",
+  "private": true,
+  "main": "index.js",
+  "dependencies": {
+    "@logto/rn": "1.2.0",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo": "~54.0.37",
+    "expo-crypto": "~15.0.9",
+    "expo-secure-store": "~15.0.8",
+    "expo-web-browser": "~15.0.11",
+    "react": "19.1.0",
+    "react-native": "0.81.5"
+  }
+}
