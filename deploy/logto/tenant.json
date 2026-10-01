@@ -357,15 +357,6 @@
         ],
         "scope": "openid profile email"
       }
-    },
-    {
-      "id": "jt2b316pyyra",
-      "connectorId": "mock-social-connector",
-      "target": "mock-social",
-      "syncProfile": false,
-      "public": {
-        "clientId": "mock"
-      }
     }
   ]
 }
