@@ -209,7 +209,8 @@
       "postLogoutRedirectUris": [
         "http://127.0.0.1:8031/",
         "http://127.0.0.1:8791/app/",
-        "https://snapforyou.swapp1990.org/"
+        "https://snapforyou.swapp1990.org/",
+        "https://snapforyou.swapp1990.org/app/"
       ],
       "customClientMetadata": {
         "corsAllowedOrigins": [
