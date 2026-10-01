@@ -1,0 +1,9 @@
+{
+  "expo": {
+    "name": "auth-expo-fixture",
+    "slug": "auth-expo-fixture",
+    "scheme": "authexpofixture",
+    "platforms": ["ios"],
+    "ios": { "bundleIdentifier": "org.swapp1990.authexpofixture" }
+  }
+}
