@@ -75,6 +75,14 @@
         "writer:generate",
         "writer:read"
       ]
+    },
+    {
+      "indicator": "https://readforyou.swapp1990.org/api",
+      "name": "ReadForYou API",
+      "accessTokenTtl": 3600,
+      "scopes": [
+        "readforyou:admin"
+      ]
     }
   ],
   "applications": [
@@ -195,6 +203,53 @@
       }
     },
     {
+      "id": "y36gv80xvtsku4hmt6nai",
+      "name": "ReadForYou Web",
+      "type": "SPA",
+      "description": "readforyou.swapp1990.org (fan-cast requests, My reels)",
+      "redirectUris": [
+        "http://127.0.0.1:5190/callback",
+        "http://127.0.0.1:5191/callback",
+        "http://127.0.0.1:5199/callback",
+        "http://localhost:5190/callback",
+        "http://localhost:5191/callback",
+        "https://readforyou.swapp1990.org/callback"
+      ],
+      "postLogoutRedirectUris": [
+        "http://127.0.0.1:5190",
+        "http://127.0.0.1:5190/",
+        "http://127.0.0.1:5191",
+        "http://127.0.0.1:5191/",
+        "http://127.0.0.1:5199",
+        "http://127.0.0.1:5199/",
+        "http://localhost:5190",
+        "http://localhost:5190/",
+        "http://localhost:5191",
+        "http://localhost:5191/",
+        "https://readforyou.swapp1990.org",
+        "https://readforyou.swapp1990.org/"
+      ],
+      "customClientMetadata": {
+        "corsAllowedOrigins": [
+          "http://127.0.0.1:5190",
+          "http://127.0.0.1:5191",
+          "http://127.0.0.1:5199",
+          "http://localhost:5190",
+          "http://localhost:5191",
+          "https://readforyou.swapp1990.org"
+        ]
+      }
+    },
+    {
+      "id": "s2p4wonwtutqec5wseyty",
+      "name": "ReadForYou admin",
+      "type": "MachineToMachine",
+      "description": "ReadForYou Studio: fan-cast request queue",
+      "roles": [
+        "ReadForYou admin"
+      ]
+    },
+    {
       "id": "wyglvzbiqmvxdaja7ycax",
       "name": "SnapForYou",
       "type": "SPA",
@@ -298,6 +353,14 @@
         "User.Deleted"
       ],
       "url": "https://jobalerts.swapp1990.org/api/logto/webhook",
+      "enabled": true
+    },
+    {
+      "name": "ReadForYou account deletion",
+      "events": [
+        "User.Deleted"
+      ],
+      "url": "https://readforyou.swapp1990.org/api/logto/webhook",
       "enabled": true
     },
     {
