@@ -22,10 +22,13 @@ import httpx
 import jwt
 from fastapi import HTTPException, Request
 from jwt import PyJWKClient
+from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from .accounts import DELETED_ACCOUNTS
 
 logger = logging.getLogger(__name__)
+
+USERS_AUTH_USER_ID_INDEX = "auth_user_id_unique"
 
 __all__ = [
     "BaseAuth",
@@ -126,6 +129,26 @@ class BaseAuth:
         self.dev_user_id = dev_user_id
         self.read_only_tools = read_only_tools or set()
         self.reject_m2m = reject_m2m
+        self._users_index_attempted = False
+
+    async def _ensure_users_index(self, users: Any) -> None:
+        """Make ``auth_user_id`` unique so concurrent first calls cannot insert two records."""
+        # One attempt per process: a collection that already holds duplicates logs and keeps serving.
+        if self._users_index_attempted:
+            return
+        self._users_index_attempted = True
+        try:
+            await users.create_index(
+                "auth_user_id",
+                name=USERS_AUTH_USER_ID_INDEX,
+                unique=True,
+                partialFilterExpression={"auth_user_id": {"$type": "string"}},
+            )
+        except PyMongoError as exc:
+            logger.error(
+                "[mcp-core] users.%s not created; concurrent first calls can duplicate a user: %s",
+                USERS_AUTH_USER_ID_INDEX, exc,
+            )
 
     @staticmethod
     def _extract_bearer_token(request: Request) -> Optional[str]:
@@ -186,6 +209,7 @@ class BaseAuth:
             return self._ephemeral_user(profile)
 
         users = db["users"]
+        await self._ensure_users_index(users)
         now = _now()
         set_fields = {
             "auth_provider": profile["auth_provider"],
@@ -225,12 +249,22 @@ class BaseAuth:
 
         # Only a new record is checked, so the tombstone costs one read per first call, not per call.
         await self.check_not_deleted(db, token_payload)
-        result = await users.find_one_and_update(
-            {"auth_user_id": profile["auth_user_id"]},
-            {"$set": set_fields, "$setOnInsert": set_on_insert},
-            upsert=True,
-            return_document=True,
-        )
+        try:
+            result = await users.find_one_and_update(
+                {"auth_user_id": profile["auth_user_id"]},
+                {"$set": set_fields, "$setOnInsert": set_on_insert},
+                upsert=True,
+                return_document=True,
+            )
+        except DuplicateKeyError:
+            # A concurrent first call inserted this user after the lookup above.
+            result = await users.find_one_and_update(
+                {"auth_user_id": profile["auth_user_id"]},
+                {"$set": set_fields},
+                return_document=True,
+            )
+            if result is None:
+                raise
         return result
 
     async def check_not_deleted(self, db: Any, token_payload: Dict[str, Any]) -> None:

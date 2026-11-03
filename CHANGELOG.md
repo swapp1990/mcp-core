@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.6.0 (unreleased)
+## 0.6.1
+
+### Fixed
+- `get_or_create_user` no longer inserts two `users` records when a new account's first calls arrive together. It creates a unique partial index `auth_user_id_unique` on `users.auth_user_id` (once per process) and, when its upsert loses the insert race, returns the record that won. A collection that already holds duplicates logs an error and keeps serving; remove the duplicates so the index can be built.
+
+## 0.6.0
 
 Store billing and shared-account deletion ([PROPOSAL_0.6.md](docs/PROPOSAL_0.6.md), part B). Every 0.5.1 API keeps working.
 

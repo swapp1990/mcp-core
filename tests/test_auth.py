@@ -5,8 +5,11 @@ import time
 
 import pytest
 from fastapi import HTTPException
+from pymongo.errors import DuplicateKeyError
 from starlette.testclient import TestClient
 from starlette.requests import Request as StarletteRequest
+
+from mcp_core.auth import USERS_AUTH_USER_ID_INDEX
 
 
 # ── Helpers ───────────────────────────────────────────────
@@ -227,6 +230,62 @@ async def test_get_or_create_user_race_condition(auth, mock_db):
     assert u1["logto_user_id"] == u2["logto_user_id"]
     count = await mock_db["users"].count_documents({"logto_user_id": "race_user"})
     assert count == 1
+
+
+class _LosesUpsertRace:
+    """A users collection where another request inserts the same user just before this upsert."""
+
+    def __init__(self, users, competitor):
+        self._users = users
+        self._competitor = competitor
+        self.raced = False
+
+    def __getattr__(self, name):
+        return getattr(self._users, name)
+
+    async def find_one_and_update(self, filter, update, **kwargs):
+        if kwargs.get("upsert") and not self.raced:
+            self.raced = True
+            await self._users.insert_one(dict(self._competitor))
+            raise DuplicateKeyError("E11000 duplicate key error index: auth_user_id_unique")
+        return await self._users.find_one_and_update(filter, update, **kwargs)
+
+
+class _UsersOverride:
+    def __init__(self, db, users):
+        self._db = db
+        self._users = users
+
+    def __getitem__(self, name):
+        return self._users if name == "users" else self._db[name]
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_user_returns_the_record_that_won_the_insert(auth, mock_db):
+    competitor = {"auth_user_id": "logto:loser", "logto_user_id": "loser", "free_credits": 10, "credits_used": 0}
+    users = _LosesUpsertRace(mock_db["users"], competitor)
+    user = await auth.get_or_create_user(_UsersOverride(mock_db, users), {"sub": "loser", "email": "l@test.com"})
+    assert users.raced
+    assert user["auth_user_id"] == "logto:loser"
+    assert user["email"] == "l@test.com"
+    assert await mock_db["users"].count_documents({"auth_user_id": "logto:loser"}) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_user_makes_auth_user_id_unique(auth, mock_db):
+    await auth.get_or_create_user(mock_db, {"sub": "indexed_user"})
+    info = await mock_db["users"].index_information()
+    assert info[USERS_AUTH_USER_ID_INDEX]["unique"] is True
+    with pytest.raises(DuplicateKeyError):
+        await mock_db["users"].insert_one({"auth_user_id": "logto:indexed_user"})
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_user_still_serves_when_duplicates_block_the_index(auth, mock_db, caplog):
+    await mock_db["users"].insert_many([{"auth_user_id": "logto:twice"}, {"auth_user_id": "logto:twice"}])
+    user = await auth.get_or_create_user(mock_db, {"sub": "fresh_user"})
+    assert user["auth_user_id"] == "logto:fresh_user"
+    assert f"users.{USERS_AUTH_USER_ID_INDEX} not created" in caplog.text
 
 
 @pytest.mark.asyncio
