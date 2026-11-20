@@ -250,6 +250,24 @@
       ]
     },
     {
+      "id": "qlsxgiv94dff5k9joy0dv",
+      "name": "ReadForYou iOS (Native)",
+      "type": "Native",
+      "description": "ReadForYou iPhone app (com.swapp1990.readforyou). Do not reuse other products' apps.",
+      "redirectUris": [
+        "readforyou://callback",
+        "readforyou://callback/"
+      ],
+      "postLogoutRedirectUris": [
+        "readforyou://callback",
+        "readforyou://callback/"
+      ],
+      "customClientMetadata": {
+        "refreshTokenTtlInDays": 180,
+        "rotateRefreshToken": true
+      }
+    },
+    {
       "id": "wyglvzbiqmvxdaja7ycax",
       "name": "SnapForYou",
       "type": "SPA",
